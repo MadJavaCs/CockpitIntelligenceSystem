@@ -1,0 +1,12 @@
+{
+  "python-envs.defaultEnvManager": "ms-python.python:system",
+  "python.defaultInterpreterPath": "C:\\Users\\Anwender\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+  "python.analysis.extraPaths": [
+    "C:\\Users\\Anwender\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages"
+  ],
+  "python.pydev.pythonExecutable": "C:\\Users\\Anwender\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+  "python.pydev.autoDetectProjects": false,
+  "python.pydev.pythonPath": [
+    "C:\\Users\\Anwender\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages"
+  ]
+}

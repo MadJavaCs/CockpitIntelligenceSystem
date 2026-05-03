@@ -568,11 +568,6 @@ function setMetric(valueId, barId, value) {
 function triggerHomeAssistantAction(drivingMode, driverState) {
   const triggerKey = `${drivingMode || "-"}|${driverState || "-"}`;
 
-  if (!lastHomeAssistantTriggerKey) {
-    lastHomeAssistantTriggerKey = triggerKey;
-    return;
-  }
-
   if (triggerKey === lastHomeAssistantTriggerKey) return;
   lastHomeAssistantTriggerKey = triggerKey;
 
