@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Porsche Assistance HMI Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div class="shell__glow shell__glow--left"></div>
+    <div class="shell__glow shell__glow--right"></div>
+
+    <header class="topbar panel">
+      <div>
+        <p class="eyebrow">Porsche Assistance System</p>
+        <h1>Cockpit Intelligence System</h1>
+      </div>
+      <div class="day-night-feature" id="day-night-feature">
+        <span class="day-night-feature__label">Derived Drive Mode</span>
+        <strong class="day-night-feature__value" id="day-night-label">NIGHT MODE ACTIVE</strong>
+        <span class="day-night-feature__meta" id="day-night-meta">Derived from System Time 22:14</span>
+      </div>
+      <div class="topbar__status">
+        <div class="status-chip">
+          <span class="status-dot" id="system-status-dot"></span>
+          <span id="system-status-label">System Online</span>
+        </div>
+        <div class="external-source-chip" id="external-source-chip" data-source-state="disconnected">
+          <span class="external-source-chip__label">External Context Source</span>
+          <strong class="external-source-chip__status" id="external-source-status">Disconnected</strong>
+        </div>
+        <div class="mode-badge" id="override-badge">Standard Mode</div>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="panel--hero driver-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Driver State</p>
+            <h2 id="mental-state">Fokussiert</h2>
+          </div>
+          <div class="tag-row">
+            <div class="mode-badge mode-badge--system" id="system-mode-badge">Normalbetrieb</div>
+            <div class="risk-pill" id="warning-pill">Warnstufe Gelb</div>
+          </div>
+        </div>
+
+        <div class="driver-panel__content">
+          <div class="radial-cluster">
+            <div class="radial-stack">
+              <div class="radial-meter radial-meter--large" style="--value: 64;" id="risk-meter">
+                <svg viewBox="0 0 120 120" aria-hidden="true">
+                  <circle class="meter-track" cx="60" cy="60" r="48"></circle>
+                  <circle class="meter-glow" cx="60" cy="60" r="48"></circle>
+                  <circle class="meter-progress" cx="60" cy="60" r="48"></circle>
+                </svg>
+                <div class="radial-meter__label">
+                  <span class="radial-meter__value" id="risk-score">64</span>
+                  <span class="radial-meter__caption">Risk Index</span>
+                  <span class="risk-trend-badge" id="risk-trend-badge" data-risk-trend="stable">Stable</span>
+                </div>
+              </div>
+              <p class="risk-influence" id="risk-influence">Night Influence +10 due to reduced visibility and higher fatigue sensitivity.</p>
+              <div class="driver-actions">
+                <button type="button" class="action-button" id="recalculate-state">Recalculate State</button>
+                <button type="button" class="action-button action-button--ghost" id="open-state-scan">Initiate 3D State Scan</button>
+              </div>
+            </div>
+
+            <div class="driver-readout">
+              <p class="driver-readout__label">Assistenzreaktion</p>
+              <p class="driver-readout__value" id="assist-reaction">Warnlicht / Fokuslenkung</p>
+              <div class="system-decision" id="system-decision" data-decision-state="warning">
+                <span class="system-decision__headline" id="system-decision-headline">Systementscheidung: Warnmodus aktiviert</span>
+                <span class="system-decision__reason" id="system-decision-reason">Stress hoch, Energy niedrig, Nachtkontext</span>
+              </div>
+              <div class="reason-structure" id="assessment-reason">
+                <div class="reason-structure__section">
+                  <span class="reason-structure__label">Ursache</span>
+                  <p class="reason-structure__text" id="reason-cause">Nachtfahrt / Nebel / sinkende Energy</p>
+                </div>
+                <div class="reason-structure__section">
+                  <span class="reason-structure__label">Analyse</span>
+                  <p class="reason-structure__text" id="reason-analysis">Risk 64 / Muede</p>
+                </div>
+                <div class="reason-structure__section">
+                  <span class="reason-structure__label">Entscheidung</span>
+                  <p class="reason-structure__text" id="reason-decision">Wachsamkeit / Fokuslenkung</p>
+                </div>
+              </div>
+              <div class="decision-chain" id="decision-chain">
+                <div class="decision-chain__step">
+                  <span class="decision-chain__stage">Input</span>
+                  <strong class="decision-chain__value" id="decision-input">Nachtfahrt / Nebel / Stress 38 / Energy 61 / Focus 57</strong>
+                </div>
+                <div class="decision-chain__step">
+                  <span class="decision-chain__stage">Analyse</span>
+                  <strong class="decision-chain__value" id="decision-analysis">Risk 64 / Muede</strong>
+                </div>
+                <div class="decision-chain__step">
+                  <span class="decision-chain__stage">Entscheidung</span>
+                  <strong class="decision-chain__value" id="decision-decision">Wachsamkeit / Warnbetrieb</strong>
+                </div>
+                <div class="decision-chain__step">
+                  <span class="decision-chain__stage">Aktion</span>
+                  <strong class="decision-chain__value" id="decision-action">Aufmerksamkeit aktiv halten und Pause frueh pruefen</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card">
+              <div class="metric-card__head">
+                <span>Stress</span>
+                <span id="stress-value">38%</span>
+              </div>
+              <div class="meter-line"><span id="stress-bar" style="width: 38%"></span></div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-card__head">
+                <span>Energy</span>
+                <span id="energy-value">61%</span>
+              </div>
+              <div class="meter-line"><span id="energy-bar" style="width: 61%"></span></div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-card__head">
+                <span>Focus</span>
+                <span id="focus-value">57%</span>
+              </div>
+              <div class="meter-line"><span id="focus-bar" style="width: 57%"></span></div>
+            </article>
+            <article class="sensor-card sensor-card--heart" id="heart-rate-card" data-sensor-state="normal">
+              <div class="sensor-card__header">
+                <div>
+                  <p class="sensor-card__eyebrow">Additional Sensor Input</p>
+                  <h3 class="sensor-card__title">Heart Rate Sensor</h3>
+                </div>
+                <span class="sensor-card__badge" id="heart-rate-badge">Normal</span>
+              </div>
+              <div class="sensor-card__body">
+                <div class="sensor-gauge" id="heart-rate-gauge" style="--value: 32;">
+                  <div class="sensor-gauge__core">
+                    <strong class="sensor-gauge__value"><span id="heart-rate-value">82</span></strong>
+                    <span class="sensor-gauge__unit">bpm</span>
+                  </div>
+                </div>
+                <div class="sensor-card__stats">
+                  <div class="sensor-stat">
+                    <span class="sensor-stat__label">Status</span>
+                    <strong class="sensor-stat__value" id="heart-rate-status">Normal</strong>
+                  </div>
+                  <div class="sensor-stat">
+                    <span class="sensor-stat__label">Impact on Risk</span>
+                    <strong class="sensor-stat__value" id="heart-rate-impact">Impact on Risk: +0</strong>
+                  </div>
+                  <p class="sensor-card__hint" id="heart-rate-hint">Prototype sensor input for driver-state evaluation.</p>
+                  <p class="sensor-card__hint sensor-card__hint--alert" id="heart-rate-discrepancy" hidden>Ungewoehnliche Diskrepanz zwischen physiologischem Zustand und Risikobewertung.</p>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel simulation-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Simulation Control</p>
+            <h2>Scenario Override</h2>
+          </div>
+          <div class="live-chip is-live" id="live-chip">Live Sync</div>
+        </div>
+
+        <form class="simulation-form" id="simulation-form">
+          <label class="field">
+            <span>Uhrzeit</span>
+            <input type="time" id="sim-time" name="time" value="22:14">
+          </label>
+          <label class="field">
+            <span>Fahrkontext</span>
+            <select id="sim-context" name="context">
+              <option value="Stadtverkehr">Stadtverkehr</option>
+              <option value="Autobahn">Autobahn</option>
+              <option value="Feierabendfahrt">Feierabendfahrt</option>
+              <option value="Nachtfahrt">Nachtfahrt</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Wetter</span>
+            <select id="sim-weather" name="weather">
+              <option value="Klar">Klar</option>
+              <option value="Regen">Regen</option>
+              <option value="Wind">Wind</option>
+              <option value="Nebel">Nebel</option>
+              <option value="Sturm">Sturm</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Critical Maneuver</span>
+            <select id="sim-critical-maneuver" name="critical_maneuver">
+              <option value="none">None</option>
+              <option value="lane_change">Lane Change</option>
+              <option value="turn">Turn</option>
+              <option value="intersection">Intersection</option>
+              <option value="overtaking">Overtaking</option>
+            </select>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="sim-override" name="override">
+            <span>Override aktivieren</span>
+          </label>
+          <div class="button-row">
+            <button type="submit" class="action-button">Apply Scenario</button>
+            <button type="button" class="action-button action-button--ghost" id="reset-simulation">Live Reset</button>
+            <button type="button" class="action-button action-button--home" id="connect-home-assistant">Connect Home Assistant</button>
+            <button type="button" class="action-button action-button--ghost action-button--home-disconnect" id="disconnect-home-assistant">Disconnect Home Assistant</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel mode-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Driving Mode</p>
+            <h2 id="driving-mode">Wachsamkeit</h2>
+            <p class="clock-panel__meta clock-panel__meta--accent" id="driving-mode-derivation">Derived from Risk Index</p>
+          </div>
+        </div>
+        <div class="mode-panel__body">
+          <div class="mode-spectrum">
+            <span>Comfort</span>
+            <span>Adaptive</span>
+            <span>Protective</span>
+          </div>
+          <div class="mode-marker">
+            <div class="mode-marker__line"></div>
+            <div class="mode-marker__point" id="mode-marker"></div>
+          </div>
+          <p class="info-copy" id="recommendation">Aufmerksamkeit aktiv halten und bei ersten Ermüdungszeichen Pause machen.</p>
+        </div>
+      </section>
+
+      <section class="panel context-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Context</p>
+            <h2 id="context-label">Nachtfahrt / Nebel</h2>
+          </div>
+          <div class="smart-context-chip" id="smart-context-status">Smart Context: Local Context Only</div>
+        </div>
+        <div class="kv-grid">
+          <div class="kv-item"><span>Route</span><strong id="route-value">A8 Urban Exit</strong></div>
+          <div class="kv-item"><span>Weather</span><strong id="weather-value">Nebel</strong></div>
+          <div class="kv-item"><span>Traffic</span><strong id="traffic-value">Moderat</strong></div>
+          <div class="kv-item"><span>Time of Day</span><strong id="time-of-day-value">Night</strong></div>
+          <div class="kv-item"><span>Home Assistant</span><strong id="home-assistant-value">Nächster Termin 10:00</strong></div>
+        </div>
+      </section>
+
+      <section class="panel clock-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">System Time</p>
+            <h2 id="clock-time">22:14</h2>
+          </div>
+        </div>
+        <div class="clock-panel__body">
+          <p class="clock-panel__date" id="clock-date">13 April 2026</p>
+          <p class="clock-panel__meta" id="phase-label">Night Operation</p>
+          <p class="clock-panel__meta" id="light-mode">Aktivierungslicht</p>
+          <p class="clock-panel__meta clock-panel__meta--accent" id="time-context-derivation">System Time 22:14 -> Night mode derived</p>
+        </div>
+      </section>
+
+      <section class="panel telemetry-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Input / Telemetry</p>
+            <h2>Signal Stream</h2>
+          </div>
+        </div>
+        <div class="telemetry-list">
+          <div class="telemetry-row"><span>Driver Camera</span><strong id="camera-status">Eyes On Road</strong></div>
+          <div class="telemetry-row"><span>Wheel Contact</span><strong id="wheel-contact">Stable</strong></div>
+          <div class="telemetry-row"><span>Cabin State</span><strong id="cabin-state">Low Noise</strong></div>
+          <div class="telemetry-row"><span>Weather Sensor</span><strong id="weather-sensor">Visibility reduced</strong></div>
+          <div class="telemetry-row"><span>Derived Input</span><strong id="input-summary">Context-sensitive adaptation active</strong></div>
+        </div>
+      </section>
+
+      <section class="panel intelligence-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Assistance Intelligence</p>
+            <h2 id="ai-title">Adaptive Support Strategy</h2>
+          </div>
+        </div>
+        <div class="intelligence-panel__body">
+          <p class="info-copy" id="ai-summary">System priorisiert ruhige Hinweise, reduzierte Reizdichte und frühzeitige Pausenempfehlung.</p>
+          <div class="tag-row">
+            <span class="tag" id="coffee-tag">Coffee: Optional</span>
+            <span class="tag" id="lighting-tag">Lighting: Aktivierung</span>
+            <span class="tag" id="context-tag">Mode: Adaptive</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel warning-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Warning System</p>
+            <h2 id="warning-title">Elevated Attention</h2>
+          </div>
+        </div>
+        <div class="warning-panel__body">
+          <div class="warning-stack">
+            <div class="warning-item"><span class="warning-item__label">Priority</span><strong id="warning-priority">Medium</strong></div>
+            <div class="warning-item"><span class="warning-item__label">Trigger</span><strong id="warning-trigger">Night fatigue pattern</strong></div>
+            <div class="warning-item"><span class="warning-item__label">Recommended Action</span><strong id="warning-action">Pause in 15 min prüfen</strong></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="scan-overlay" id="scan-overlay" hidden>
+    <div class="scan-overlay__backdrop" id="scan-overlay-close"></div>
+    <section class="panel scan-modal" aria-modal="true" role="dialog" aria-labelledby="scan-headline">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow">3D Driver State Scan</p>
+          <h2 id="scan-headline">Stable driver state</h2>
+        </div>
+        <button type="button" class="action-button action-button--ghost" id="close-state-scan">Close Scan</button>
+      </div>
+      <div class="scan-modal__body">
+        <canvas class="scan-canvas" id="state-scan-canvas" width="760" height="460"></canvas>
+        <div class="scan-readout">
+          <p class="scan-readout__headline">State Interpretation</p>
+          <p class="scan-readout__text" id="scan-summary">Der Zustand ist stabil. Der Fahrer ist wachsam, die Assistenz bleibt ruhig und begleitet ohne zusaetzlichen Eingriff.</p>
+          <div class="scan-position-card">
+            <span class="scan-position-card__label">3D Position</span>
+            <strong class="scan-position-card__value" id="scan-position">(38, 61, 57)</strong>
+            <p class="scan-position-card__hint" id="scan-position-hint">Position = (Stress, Energy, Focus)</p>
+          </div>
+          <div class="scan-axis-list">
+            <div class="scan-axis-item"><span>Stress</span><strong id="scan-stress">38</strong></div>
+            <div class="scan-axis-item"><span>Energy</span><strong id="scan-energy">61</strong></div>
+            <div class="scan-axis-item"><span>Focus</span><strong id="scan-focus">57</strong></div>
+          </div>
+          <p class="scan-readout__meta" id="scan-axis-explainer">X = Stress, Y = Energy, Z = Focus. Hoehere Werte verschieben den Punkt entlang der jeweiligen Achse.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
