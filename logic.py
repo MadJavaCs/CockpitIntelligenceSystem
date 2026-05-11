@@ -46,12 +46,160 @@ def derive_distraction_state(fokuslevel: int) -> dict[str, str | int]:
     return {"state": "keine Ablenkung", "risk_modifier": 0}
 
 
-def derive_driver_state_from_risk(risk_score: int) -> str:
-    if risk_score >= 65:
+def derive_risk_trend(risk_score: int, previous_risk_score: int | None = None) -> str:
+    if previous_risk_score is None:
+        return "stable"
+    delta = risk_score - previous_risk_score
+    if delta >= 4:
+        return "rising"
+    if delta <= -4:
+        return "falling"
+    return "stable"
+
+
+def derive_driver_state_from_risk(
+    risk_score: int,
+    stresslevel: int | None = None,
+    energielevel: int | None = None,
+    fokuslevel: int | None = None,
+    heart_rate_state: str = "normal",
+    time_of_day: str | None = None,
+    weather: str = "Klar",
+    previous_state: str | None = None,
+    risk_trend: str = "stable",
+) -> str:
+    stress = 50 if stresslevel is None else stresslevel
+    energy = 60 if energielevel is None else energielevel
+    focus = 60 if fokuslevel is None else fokuslevel
+    normalized_previous = str(previous_state or "").strip().lower()
+    normalized_heart_rate = heart_rate_state.strip().lower()
+    normalized_weather = weather.strip().lower()
+    is_rising = risk_trend == "rising"
+    is_falling = risk_trend == "falling"
+    context_pressure = 0
+
+    if stress >= 75:
+        context_pressure += 5
+    if energy <= 35:
+        context_pressure += 5
+    if focus <= 40:
+        context_pressure += 6
+    if normalized_heart_rate == "kritisch erhoeht":
+        context_pressure += 8
+    elif normalized_heart_rate == "erhoeht":
+        context_pressure += 5
+    if time_of_day == "night":
+        context_pressure += 4
+    if normalized_weather == "nebel":
+        context_pressure += 4
+
+    effective_risk = clamp_to_percent(risk_score + context_pressure)
+    severe_signal = stress >= 82 or focus <= 30 or normalized_heart_rate == "kritisch erhoeht"
+    fatigue_signal = energy <= 42 and focus <= 55
+
+    if normalized_previous == "kritisch":
+        if risk_score >= 58 or severe_signal or (effective_risk >= 62 and not is_falling):
+            return "kritisch"
+        return "muede" if risk_score >= 35 or fatigue_signal else "wachsam"
+
+    if normalized_previous == "muede":
+        if effective_risk >= 68 and (is_rising or severe_signal):
+            return "kritisch"
+        if risk_score >= 30 or fatigue_signal or (time_of_day == "night" and normalized_weather == "nebel"):
+            return "muede"
+        return "wachsam"
+
+    if effective_risk >= 68 and (is_rising or severe_signal or risk_score >= 72):
         return "kritisch"
-    if risk_score >= 35:
+    if effective_risk >= 38 or fatigue_signal:
         return "muede"
     return "wachsam"
+
+
+def derive_night_risk_modifier(time_of_day: str | None, energielevel: int, fokuslevel: int) -> int:
+    if time_of_day != "night":
+        return 0
+    if energielevel <= 50 or fokuslevel <= 50:
+        return 6
+    return 4
+
+
+def derive_weather_risk_modifier(weather: str, stresslevel: int, fokuslevel: int) -> int:
+    normalized_weather = weather.strip().lower()
+
+    if normalized_weather == "sturm":
+        return 10
+    if normalized_weather == "nebel":
+        return 8 if fokuslevel < 60 else 6
+    if normalized_weather == "regen":
+        return 6 if stresslevel >= 65 else 4
+    if normalized_weather == "wind":
+        return 3
+    return 0
+
+
+def derive_critical_maneuver_risk_modifier(critical_maneuver: str | None) -> int:
+    modifiers = {
+        "overtaking": 12,
+        "intersection": 9,
+        "lane_change": 7,
+        "turn": 5,
+    }
+    return modifiers.get(str(critical_maneuver or "none").strip().lower(), 0)
+
+
+def derive_heart_rate_risk_modifier(heart_rate: int | None) -> tuple[int, str]:
+    if heart_rate is None:
+        return 0, "nicht verfuegbar"
+    if heart_rate > 105:
+        return 15, "kritisch erhoeht"
+    if heart_rate >= 86:
+        return 8, "erhoeht"
+    return 0, "normal"
+
+
+def derive_awareness_coupling_modifier(heart_rate_state: str, critical_maneuver: str | None) -> int:
+    maneuver_modifier = derive_critical_maneuver_risk_modifier(critical_maneuver)
+    if maneuver_modifier <= 0:
+        return 0
+    if heart_rate_state == "kritisch erhoeht":
+        return 10 if str(critical_maneuver).strip().lower() in {"turn", "intersection"} else 8
+    if heart_rate_state == "erhoeht":
+        return 6
+    return 0
+
+
+def derive_support_strategy(
+    risk_score: int,
+    driver_state: str,
+    fokuslevel: int,
+    critical_maneuver: str | None = None,
+) -> dict[str, str]:
+    maneuver_active = derive_critical_maneuver_risk_modifier(critical_maneuver) > 0
+
+    if driver_state == "kritisch" or risk_score >= 65:
+        return {
+            "support_strategy": "Intervention Support + Maneuver Guard" if maneuver_active else "Intervention Support",
+            "assist_reaction": "Intervention Support",
+            "trigger_reason": f"Risk {risk_score}: kritischer Zustand",
+        }
+    if fokuslevel < 60:
+        return {
+            "support_strategy": "Focus Guidance + Maneuver Guard" if maneuver_active else "Focus Guidance",
+            "assist_reaction": "Fokuslenkung",
+            "trigger_reason": f"Risk {risk_score}: niedriger Focus",
+        }
+    if risk_score >= 35:
+        return {
+            "support_strategy": "Attention Support + Maneuver Guard" if maneuver_active else "Attention Support",
+            "assist_reaction": "Wachsamkeitswarnung",
+            "trigger_reason": f"Risk {risk_score}: mittlere Belastung",
+        }
+    return {
+        "support_strategy": "Passive Monitoring",
+        "assist_reaction": "Monitoring",
+        "trigger_reason": f"Risk {risk_score}: stabiler Zustand",
+    }
 
 
 def build_risk_explanation(
@@ -65,7 +213,7 @@ def build_risk_explanation(
     beitraege: list[dict[str, str | int]] = []
 
     if time_of_day == "night":
-        nacht_beitrag = 1 if energielevel >= 75 and fokuslevel >= 75 else 2
+        nacht_beitrag = derive_night_risk_modifier(time_of_day, energielevel, fokuslevel)
         beitraege.append({"label": "Nachtfahrt", "value": nacht_beitrag, "type": "risk"})
     else:
         beitraege.append({"label": "Tagkontext", "value": -1, "type": "stabilizer"})
@@ -85,14 +233,9 @@ def build_risk_explanation(
     elif driving_context == "Feierabendfahrt":
         beitraege.append({"label": "Feierabendfahrt", "value": 3 if energielevel >= 45 else 7, "type": "risk"})
 
-    if weather == "Sturm":
-        beitraege.append({"label": "Sturm", "value": 3 if stresslevel < 70 else 5, "type": "risk"})
-    elif weather == "Nebel":
-        beitraege.append({"label": "Nebel", "value": 2 if fokuslevel >= 60 else 3, "type": "risk"})
-    elif weather == "Regen":
-        beitraege.append({"label": "Regen", "value": 2 if stresslevel < 65 else 5, "type": "risk"})
-    elif weather == "Wind":
-        beitraege.append({"label": "Wind", "value": 2 if fokuslevel >= 55 else 4, "type": "risk"})
+    weather_delta = derive_weather_risk_modifier(weather, stresslevel, fokuslevel)
+    if weather_delta:
+        beitraege.append({"label": weather, "value": weather_delta, "type": "risk"})
 
     stress_delta = 0
     if stresslevel >= 75:
@@ -216,6 +359,10 @@ def build_risk_formula(
     stresslevel: int,
     energielevel: int,
     fokuslevel: int,
+    weather: str = "Klar",
+    time_of_day: str | None = None,
+    critical_maneuver: str | None = None,
+    heart_rate: int | None = None,
     random_offset: int | None = None,
 ) -> dict[str, str | int | float]:
     stress_component = round(stresslevel * 0.45, 1)
@@ -223,8 +370,26 @@ def build_risk_formula(
     focus_component = round((100 - fokuslevel) * 0.20, 1)
     distraction = derive_distraction_state(fokuslevel)
     distraction_modifier = int(distraction["risk_modifier"])
+    night_modifier = derive_night_risk_modifier(time_of_day, energielevel, fokuslevel)
+    weather_modifier = derive_weather_risk_modifier(weather, stresslevel, fokuslevel)
+    maneuver_modifier = derive_critical_maneuver_risk_modifier(critical_maneuver)
+    heart_rate_modifier, heart_rate_state = derive_heart_rate_risk_modifier(heart_rate)
+    awareness_modifier = derive_awareness_coupling_modifier(heart_rate_state, critical_maneuver)
     offset = random.randint(-5, 5) if random_offset is None else max(-5, min(5, int(random_offset)))
-    score = clamp_to_percent(round(stress_component + energy_component + focus_component + distraction_modifier + offset))
+    score = clamp_to_percent(
+        round(
+            stress_component
+            + energy_component
+            + focus_component
+            + distraction_modifier
+            + night_modifier
+            + weather_modifier
+            + maneuver_modifier
+            + heart_rate_modifier
+            + awareness_modifier
+            + offset
+        )
+    )
 
     return {
         "score": score,
@@ -233,10 +398,19 @@ def build_risk_formula(
         "focus_component": focus_component,
         "distraction_state": str(distraction["state"]),
         "distraction_modifier": distraction_modifier,
+        "night_modifier": night_modifier,
+        "weather_modifier": weather_modifier,
+        "critical_maneuver_modifier": maneuver_modifier,
+        "heart_rate_modifier": heart_rate_modifier,
+        "heart_rate_state": heart_rate_state,
+        "awareness_coupling_modifier": awareness_modifier,
         "random_offset": offset,
         "formula_text": (
             f"Stress {stress_component:.1f} + Energy {energy_component:.1f} + "
-            f"Focus {focus_component:.1f} + Ablenkung {distraction_modifier:+d} + Zufall {offset:+d}"
+            f"Focus {focus_component:.1f} + Ablenkung {distraction_modifier:+d} "
+            f"+ Nacht {night_modifier:+d} + Wetter {weather_modifier:+d} "
+            f"+ Manoever {maneuver_modifier:+d} + Herzfrequenz {heart_rate_modifier:+d} "
+            f"+ Kopplung {awareness_modifier:+d} + Zufall {offset:+d}"
         ),
     }
 
@@ -432,6 +606,10 @@ def analyze_driver_state(
     driving_context: str,
     weather: str = "Klar",
     outside_temperature: int | None = None,
+    critical_maneuver: str | None = None,
+    heart_rate: int | None = None,
+    previous_state: str | None = None,
+    previous_risk_score: int | None = None,
 ) -> dict[str, dict[str, str | int]]:
     time_of_day = get_time_of_day(uhrzeit)
     is_night = time_of_day == "night"
@@ -440,6 +618,10 @@ def analyze_driver_state(
         telemetrie["stresslevel"],
         telemetrie["energielevel"],
         telemetrie["fokuslevel"],
+        weather,
+        time_of_day,
+        critical_maneuver,
+        heart_rate,
     )
     auswertung = evaluate_context(
         uhrzeit,
@@ -451,7 +633,18 @@ def analyze_driver_state(
         outside_temperature,
     )
     risikoscore = int(risikologik["score"])
-    fahrerzustand = derive_driver_state_from_risk(risikoscore)
+    risiko_trend = derive_risk_trend(risikoscore, previous_risk_score)
+    fahrerzustand = derive_driver_state_from_risk(
+        risikoscore,
+        telemetrie["stresslevel"],
+        telemetrie["energielevel"],
+        telemetrie["fokuslevel"],
+        str(risikologik["heart_rate_state"]),
+        time_of_day,
+        weather,
+        previous_state,
+        risiko_trend,
+    )
     risiko_begruendung = build_risk_explanation(
         telemetrie["stresslevel"],
         telemetrie["energielevel"],
@@ -463,6 +656,7 @@ def analyze_driver_state(
     warnstufe = determine_warning_level(risikoscore)
     lichtmodus = determine_light_mode(fahrerzustand, warnstufe)
     lichtfarbe = get_visual_state(fahrerzustand)
+    support = derive_support_strategy(risikoscore, fahrerzustand, telemetrie["fokuslevel"], critical_maneuver)
 
     return {
         "input": {
@@ -481,7 +675,13 @@ def analyze_driver_state(
             "risiko_formel": str(risikologik["formula_text"]),
             "distraction_state": str(risikologik["distraction_state"]),
             "distraction_modifier": int(risikologik["distraction_modifier"]),
+            "night_modifier": int(risikologik["night_modifier"]),
+            "weather_modifier": int(risikologik["weather_modifier"]),
+            "critical_maneuver_modifier": int(risikologik["critical_maneuver_modifier"]),
+            "heart_rate_modifier": int(risikologik["heart_rate_modifier"]),
+            "awareness_coupling_modifier": int(risikologik["awareness_coupling_modifier"]),
             "risiko_random_offset": int(risikologik["random_offset"]),
+            "risiko_trend": risiko_trend,
             "warnstufe": warnstufe,
             "empfehlung": auswertung["empfehlung"],
             "begruendung": auswertung["begruendung"],
@@ -490,6 +690,9 @@ def analyze_driver_state(
             "risiko_beitraege": risiko_begruendung["contributions"],
             "risiko_details": risiko_begruendung["detail_text"],
             "modus": auswertung["modus"],
+            "support_strategy": support["support_strategy"],
+            "trigger_reason": support["trigger_reason"],
+            "assist_reaction": support["assist_reaction"],
             "lichtmodus": lichtmodus,
             "lichtfarbe": lichtfarbe["farbname"],
             "lichtfarbe_hex": lichtfarbe["hex"],
@@ -588,7 +791,7 @@ def calculate_risk_score(
     time_of_day: str | None = None,
     outside_temperature: int | None = None,
 ) -> int:
-    return int(build_risk_formula(stresslevel, energielevel, fokuslevel)["score"])
+    return int(build_risk_formula(stresslevel, energielevel, fokuslevel, weather, time_of_day)["score"])
 
 
 def determine_warning_level(risk_score: int) -> str:

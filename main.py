@@ -32,6 +32,8 @@ class PorscheAssistantBackend:
         default_factory=lambda: Systemzustand(kontext="Initialisierung", ist_aktiv=False)
     )
     override_mode: bool = False
+    previous_driver_state: str | None = None
+    previous_risk_score: int | None = None
     home_assistant: HomeAssistantClient = field(default_factory=HomeAssistantClient)
 
     def build_dashboard_state(self) -> dict[str, Any]:
@@ -64,6 +66,8 @@ class PorscheAssistantBackend:
         warning_level = str(assessment["warnstufe"])
         risk_score = int(assessment["risiko_score"])
         driver_state = self._format_driver_state(str(assessment["fahrerzustand"]))
+        self.previous_driver_state = str(assessment["fahrerzustand"])
+        self.previous_risk_score = risk_score
         system_mode = self._derive_system_mode(driver_state)
         driving_mode = self._derive_driving_mode(risk_score)
 
@@ -108,18 +112,26 @@ class PorscheAssistantBackend:
                 "riskFormula": str(assessment.get("risiko_formel", "")),
                 "distractionState": str(assessment.get("distraction_state", "keine Ablenkung")),
                 "distractionModifier": int(assessment.get("distraction_modifier", 0)),
+                "nightModifier": int(assessment.get("night_modifier", 0)),
+                "weatherImpact": int(assessment.get("weather_modifier", 0)),
+                "criticalManeuverImpact": int(assessment.get("critical_maneuver_modifier", 0)),
+                "sensorModifier": int(assessment.get("heart_rate_modifier", 0)),
+                "awarenessBoostImpact": int(assessment.get("awareness_coupling_modifier", 0)),
                 "riskRandomOffset": int(assessment.get("risiko_random_offset", 0)),
+                "riskTrend": str(assessment.get("risiko_trend", "stable")),
                 "warningLevel": warning_level,
                 "recommendation": str(assessment["empfehlung"]),
                 "criticalManeuverState": critical_maneuver,
                 "criticalManeuverStrategy": self._derive_critical_maneuver_strategy(critical_maneuver),
                 "reason": str(assessment["begruendung"]),
-                "assistReaction": self._derive_assist_reaction(
+                "assistReaction": str(assessment.get("assist_reaction") or self._derive_assist_reaction(
                     warning_level,
                     int(telemetry["fokuslevel"]),
                     str(assessment.get("distraction_state", "keine Ablenkung")),
-                ),
+                )),
                 "lightMode": str(assessment["lichtmodus"]),
+                "supportStrategy": str(assessment.get("support_strategy", "")),
+                "triggerReason": str(assessment.get("trigger_reason", "")),
                 "aiTitle": "Adaptive Support Strategy",
                 "aiSummary": self._build_ai_summary(
                     str(assessment["modus"]),
@@ -130,12 +142,12 @@ class PorscheAssistantBackend:
                 "coffeeReason": str(assessment["coffee_reason"]),
                 "warningTitle": self._derive_warning_title(warning_level),
                 "warningPriority": self._derive_warning_priority(warning_level),
-                "warningTrigger": self._derive_warning_trigger(
+                "warningTrigger": str(assessment.get("trigger_reason") or self._derive_warning_trigger(
                     driving_context,
                     weather,
                     int(telemetry["energielevel"]),
                     int(telemetry["stresslevel"]),
-                ),
+                )),
                 "warningAction": self._derive_warning_action(
                     warning_level,
                     str(assessment["empfehlung"]),
@@ -150,6 +162,10 @@ class PorscheAssistantBackend:
             context["driving_context"],
             context.get("weather", "Klar"),
             self._coerce_temperature(context.get("outside_temperature")),
+            context.get("critical_maneuver", "none"),
+            self._coerce_heart_rate(context.get("heart_rate") or context.get("heartRate")),
+            self.previous_driver_state,
+            self.previous_risk_score,
         )
 
     def _get_home_assistant_data(self) -> dict[str, str]:
@@ -159,6 +175,14 @@ class PorscheAssistantBackend:
             return {}
 
     def _coerce_temperature(self, value: Any) -> int | None:
+        if value in {None, ""}:
+            return None
+        try:
+            return int(float(str(value).replace(",", ".")))
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_heart_rate(self, value: Any) -> int | None:
         if value in {None, ""}:
             return None
         try:

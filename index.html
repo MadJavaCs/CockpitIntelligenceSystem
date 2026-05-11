@@ -30,12 +30,34 @@
           <span id="system-status-label">System Online</span>
         </div>
         <div class="external-source-chip" id="external-source-chip" data-source-state="disconnected">
-          <span class="external-source-chip__label">External Context Source</span>
-          <strong class="external-source-chip__status" id="external-source-status">Disconnected</strong>
+          <span class="external-source-chip__label">Home Assistant Sync</span>
+          <strong class="external-source-chip__status" id="external-source-status">HA Offline</strong>
         </div>
-        <div class="mode-badge" id="override-badge">Standard Mode</div>
+        <div class="mode-badge" id="override-badge">Runtime Standard</div>
+        <button type="button" class="debug-toggle" id="debug-overlay-toggle" aria-controls="debug-overlay" aria-expanded="false">Debug</button>
       </div>
     </header>
+
+    <aside class="debug-overlay" id="debug-overlay" aria-label="Developer System Overlay" hidden>
+      <div class="debug-overlay__header">
+        <span>System Overlay</span>
+        <strong>DEV</strong>
+      </div>
+      <div class="debug-overlay__grid">
+        <span>Driver State</span>
+        <strong id="debug-driver-state">-</strong>
+        <span>Risk Index</span>
+        <strong id="debug-risk-index">-</strong>
+        <span>Mode</span>
+        <strong id="debug-driving-mode">-</strong>
+        <span>HA Sync</span>
+        <strong id="debug-ha-status">-</strong>
+        <span>MQTT Topic</span>
+        <strong id="debug-mqtt-topic">-</strong>
+        <span>Last Event Time</span>
+        <strong id="debug-last-event-time">-</strong>
+      </div>
+    </aside>
 
     <main class="dashboard">
       <section class="panel--hero driver-panel">
@@ -175,7 +197,7 @@
             <p class="eyebrow">Simulation Control</p>
             <h2>Scenario Override</h2>
           </div>
-          <div class="live-chip is-live" id="live-chip">Live Sync</div>
+          <div class="live-chip is-live" id="live-chip">Runtime Sync</div>
         </div>
 
         <form class="simulation-form" id="simulation-form">
@@ -219,8 +241,8 @@
           <div class="button-row">
             <button type="submit" class="action-button">Apply Scenario</button>
             <button type="button" class="action-button action-button--ghost" id="reset-simulation">Live Reset</button>
-            <button type="button" class="action-button action-button--home" id="connect-home-assistant">Connect Home Assistant</button>
-            <button type="button" class="action-button action-button--ghost action-button--home-disconnect" id="disconnect-home-assistant">Disconnect Home Assistant</button>
+            <button type="button" class="action-button action-button--home" id="connect-home-assistant">Connect HA Sync</button>
+            <button type="button" class="action-button action-button--ghost action-button--home-disconnect" id="disconnect-home-assistant">Disconnect HA Sync</button>
           </div>
         </form>
       </section>
@@ -249,11 +271,11 @@
 
       <section class="panel context-panel">
         <div class="panel__header">
-          <div>
+          <div class="context-card-header">
             <p class="eyebrow">Context</p>
             <h2 id="context-label">Nachtfahrt / Nebel</h2>
+            <div class="smart-context-chip context-badge" id="smart-context-status">Smart Context: Local Sync</div>
           </div>
-          <div class="smart-context-chip" id="smart-context-status">Smart Context: Local Context Only</div>
         </div>
         <div class="kv-grid">
           <div class="kv-item"><span>Route</span><strong id="route-value">A8 Urban Exit</strong></div>
@@ -291,7 +313,79 @@
           <div class="telemetry-row"><span>Wheel Contact</span><strong id="wheel-contact">Stable</strong></div>
           <div class="telemetry-row"><span>Cabin State</span><strong id="cabin-state">Low Noise</strong></div>
           <div class="telemetry-row"><span>Weather Sensor</span><strong id="weather-sensor">Visibility reduced</strong></div>
-          <div class="telemetry-row"><span>Derived Input</span><strong id="input-summary">Context-sensitive adaptation active</strong></div>
+          <div class="telemetry-row"><span>Derived Input</span><strong id="input-summary">Context adaptation active</strong></div>
+        </div>
+      </section>
+
+      <section class="panel system-status-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Runtime</p>
+            <h2>System Status</h2>
+          </div>
+        </div>
+        <div class="system-status-list">
+          <div class="system-status-row" data-status-level="ok">
+            <span class="system-status-row__indicator"></span>
+            <span class="system-status-row__label">FastAPI Backend</span>
+            <strong id="runtime-backend-status">Backend Online</strong>
+          </div>
+          <div class="system-status-row" data-status-level="warn">
+            <span class="system-status-row__indicator"></span>
+            <span class="system-status-row__label">Home Assistant</span>
+            <strong id="runtime-ha-status">HA Standby</strong>
+          </div>
+          <div class="system-status-row" data-status-level="warn">
+            <span class="system-status-row__indicator"></span>
+            <span class="system-status-row__label">MQTT Layer</span>
+            <strong id="runtime-mqtt-status">MQTT Simulated</strong>
+          </div>
+          <div class="system-status-row" data-status-level="ok">
+            <span class="system-status-row__indicator"></span>
+            <span class="system-status-row__label">Driver State Engine</span>
+            <strong id="runtime-driver-engine-status">Engine Active</strong>
+          </div>
+          <div class="system-status-row system-status-row--timestamp" data-status-level="ok">
+            <span class="system-status-row__indicator"></span>
+            <span class="system-status-row__label">Last Sync</span>
+            <strong id="runtime-last-sync">--:--:--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel event-timeline-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Runtime Events</p>
+            <h2>Event Timeline</h2>
+          </div>
+        </div>
+        <div class="event-timeline" id="event-timeline" aria-live="polite">
+          <div class="event-timeline__item" data-event-type="system">
+            <span class="event-timeline__time">--:--:--</span>
+            <strong>System</strong>
+            <p>Timeline ready</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel mqtt-panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">MQTT Event Bus</p>
+            <h2>Driver State Topic</h2>
+          </div>
+        </div>
+        <div class="telemetry-list">
+          <div class="telemetry-row"><span>MQTT Status</span><strong id="mqtt-status">MQTT Simulated</strong></div>
+          <div class="telemetry-row"><span>Topic</span><strong id="mqtt-topic">porsche/driver/state</strong></div>
+          <div class="telemetry-row"><span>Last Event</span><strong id="mqtt-last-event">Muede</strong></div>
+          <pre class="info-copy" id="mqtt-payload">{
+  "driverState": "Muede",
+  "drivingMode": "Wachsamkeit",
+  "riskIndex": 64,
+  "timestamp": "-"
+}</pre>
         </div>
       </section>
 

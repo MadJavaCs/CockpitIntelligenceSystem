@@ -39,12 +39,38 @@ html, body { margin: 0; min-height: 100%; }
 body {
   font-family: "Rajdhani", sans-serif;
   color: var(--text);
+  --state-accent: var(--amber);
+  --state-accent-rgb: 255 184 77;
+  --state-glow-opacity: 0.08;
+  --state-panel-tint: rgba(255, 184, 77, 0.035);
   background:
     radial-gradient(circle at 15% 20%, rgba(255, 122, 41, 0.18), transparent 24%),
     radial-gradient(circle at 85% 16%, rgba(79, 124, 255, 0.18), transparent 22%),
     radial-gradient(circle at 50% 100%, rgba(105, 232, 255, 0.12), transparent 30%),
     linear-gradient(180deg, #04070d 0%, #08101a 48%, #06090f 100%);
   overflow-x: hidden;
+  transition: background-color 700ms ease;
+}
+
+body[data-driver-state="wachsam"] {
+  --state-accent: var(--green);
+  --state-accent-rgb: 94 242 161;
+  --state-glow-opacity: 0.055;
+  --state-panel-tint: rgba(94, 242, 161, 0.028);
+}
+
+body[data-driver-state="muede"] {
+  --state-accent: var(--amber);
+  --state-accent-rgb: 255 184 77;
+  --state-glow-opacity: 0.075;
+  --state-panel-tint: rgba(255, 184, 77, 0.035);
+}
+
+body[data-driver-state="kritisch"] {
+  --state-accent: var(--red);
+  --state-accent-rgb: 255 77 109;
+  --state-glow-opacity: 0.095;
+  --state-panel-tint: rgba(255, 77, 109, 0.04);
 }
 
 body::before {
@@ -63,7 +89,7 @@ body::before {
   position: relative;
   max-width: 1600px;
   margin: 0 auto;
-  padding: 28px;
+  padding: 24px;
 }
 
 .shell__glow {
@@ -82,11 +108,14 @@ body::before {
 .topbar,
 .panel {
   position: relative;
-  background: linear-gradient(180deg, rgba(12, 21, 33, 0.94), rgba(8, 13, 21, 0.88));
+  background:
+    linear-gradient(180deg, var(--state-panel-tint), transparent 62%),
+    linear-gradient(180deg, rgba(12, 21, 33, 0.94), rgba(8, 13, 21, 0.88));
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow);
   backdrop-filter: blur(14px);
+  transition: background 680ms ease, border-color 680ms ease, box-shadow 680ms ease, filter 420ms ease;
 }
 
 .topbar::after,
@@ -102,15 +131,16 @@ body::before {
   mask-composite: exclude;
   pointer-events: none;
   opacity: 0.6;
+  transition: opacity 680ms ease, background 680ms ease;
 }
 
 .topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 24px 28px;
-  margin-bottom: 24px;
-  gap: 18px;
+  padding: 20px 24px;
+  margin-bottom: 18px;
+  gap: 16px;
   flex-wrap: wrap;
 }
 
@@ -125,7 +155,7 @@ body::before {
 .topbar h1 { font-size: clamp(1.4rem, 2.6vw, 2.8rem); }
 
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   text-transform: uppercase;
   letter-spacing: 0.28em;
   color: var(--cyan);
@@ -135,7 +165,7 @@ body::before {
 .topbar__status, .button-row, .tag-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
 }
 
 .topbar__status {
@@ -150,10 +180,13 @@ body::before {
 .mode-badge,
 .risk-pill,
 .tag,
-.live-chip {
+.live-chip,
+.debug-toggle {
+  min-height: 38px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
   border-radius: 999px;
+  line-height: 1;
 }
 
 .status-chip {
@@ -169,9 +202,101 @@ body::before {
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 14px currentColor;
+  transition: background 420ms ease, box-shadow 420ms ease, transform 420ms ease;
 }
 
-.mode-badge, .risk-pill, .tag, .live-chip { padding: 10px 14px; color: var(--text); }
+body.is-dashboard-transitioning .status-dot,
+body.is-dashboard-transitioning .system-status-row__indicator {
+  animation: statusActivityTick 720ms ease-out;
+}
+
+.mode-badge, .risk-pill, .tag, .live-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 14px;
+  color: var(--text);
+}
+
+.debug-toggle {
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 10px 12px;
+  text-transform: uppercase;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.debug-toggle:hover,
+.debug-toggle:focus-visible,
+.debug-toggle.is-active {
+  color: var(--cyan);
+  border-color: rgba(105, 232, 255, 0.32);
+  background: rgba(105, 232, 255, 0.08);
+  box-shadow: 0 0 16px rgba(105, 232, 255, 0.08);
+  outline: none;
+}
+
+.debug-overlay {
+  position: fixed;
+  top: 112px;
+  right: 28px;
+  z-index: 30;
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid rgba(105, 232, 255, 0.18);
+  border-radius: 16px;
+  background: rgba(6, 12, 20, 0.92);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.36), inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(14px);
+}
+
+.debug-overlay[hidden] {
+  display: none;
+}
+
+.debug-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: var(--cyan);
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.debug-overlay__header strong {
+  color: var(--muted);
+  font-family: "Rajdhani", sans-serif;
+  letter-spacing: 0.18em;
+}
+
+.debug-overlay__grid {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.debug-overlay__grid span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.debug-overlay__grid strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.98rem;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .tag--attention[data-distraction-state="none"] {
   border-color: rgba(94, 242, 161, 0.26);
@@ -195,11 +320,16 @@ body::before {
   display: grid;
   gap: 4px;
   min-width: 220px;
+  min-height: 52px;
   padding: 10px 14px;
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.04);
   transition: border-color 220ms ease, box-shadow 220ms ease, background 220ms ease;
+}
+
+.context-panel {
+  overflow: hidden;
 }
 
 .external-source-chip__label {
@@ -284,7 +414,7 @@ body::before {
 
 .day-night-feature {
   min-width: 320px;
-  padding: 14px 18px;
+  padding: 12px 16px;
   border-radius: 18px;
   border: 1px solid rgba(105, 232, 255, 0.28);
   background:
@@ -341,17 +471,24 @@ body::before {
 .dashboard {
   display: grid;
   grid-template-columns: 1.45fr 1fr 1fr 0.95fr;
-  gap: 20px;
+  gap: 16px;
 }
 
-.panel { padding: 22px; min-height: 220px; }
+.panel { padding: 18px; min-height: 200px; }
 .panel--hero { grid-column: span 2; grid-row: span 2; min-height: 520px; }
 .simulation-panel, .telemetry-panel { grid-row: span 2; }
+.telemetry-panel,
+.system-status-panel,
+.event-timeline-panel,
+.mqtt-panel,
+.intelligence-panel {
+  grid-column: span 2;
+}
 .warning-panel { grid-column: span 2; }
 
 .driver-panel {
   position: relative;
-  padding: 22px;
+  padding: 20px;
   min-height: 520px;
 }
 
@@ -400,8 +537,25 @@ body::before {
   gap: 12px;
 }
 
-.panel__header { align-items: flex-start; margin-bottom: 22px; }
+.panel__header { align-items: flex-start; margin-bottom: 16px; }
+.panel__header > div:first-child {
+  min-width: 0;
+}
 .panel__header h2 { font-size: clamp(1.1rem, 1.5vw, 1.5rem); }
+
+.context-card-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.panel__header h2,
+.context-card-header .eyebrow {
+  max-width: 100%;
+}
 
 .driver-panel__content,
 .mode-panel__body,
@@ -413,7 +567,7 @@ body::before {
 .telemetry-list,
 .warning-stack {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .telemetry-panel {
@@ -423,7 +577,7 @@ body::before {
 .radial-cluster {
   display: grid;
   grid-template-columns: 240px 1fr;
-  gap: 24px;
+  gap: 20px;
   align-items: center;
 }
 
@@ -452,7 +606,7 @@ body::before {
   filter: none;
   backdrop-filter: none;
   will-change: auto;
-  transition: --risk-color 320ms ease, --risk-rgb 480ms ease;
+  transition: --risk-color 700ms ease, --risk-rgb 700ms ease;
 }
 
 .radial-meter::before,
@@ -514,6 +668,16 @@ body::before {
 }
 
 .radial-meter__value { font-family: "Orbitron", sans-serif; font-size: 2.7rem; }
+.radial-meter__value,
+.risk-trend-badge {
+  transition: color 260ms ease, text-shadow 260ms ease, transform 260ms ease;
+}
+
+body.is-state-value-animating .radial-meter__value {
+  transform: translateY(-1px) scale(1.025);
+  text-shadow: 0 0 18px rgb(var(--risk-rgb) / 0.24);
+}
+
 .radial-meter__caption { color: var(--muted); text-transform: uppercase; letter-spacing: 0.2em; }
 .risk-trend-badge {
   justify-self: center;
@@ -1126,12 +1290,12 @@ body::before {
 }
 
 .driver-readout {
-  padding: 20px;
+  padding: 16px;
   border-radius: var(--radius-sm);
   background: linear-gradient(135deg, rgba(255, 122, 41, 0.08), transparent 50%), rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .driver-readout__label,
@@ -1144,19 +1308,19 @@ body::before {
 .field span { color: var(--muted); }
 
 .driver-readout__label {
-  margin: 0 0 12px;
+  margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.22em;
   font-size: 0.8rem;
 }
 
 .driver-readout__value {
-  margin: 0 0 12px;
+  margin: 0;
   font-family: "Orbitron", sans-serif;
   font-size: clamp(1.1rem, 1.8vw, 1.7rem);
 }
 
-.driver-readout__text, .info-copy { margin: 0; font-size: 1.06rem; line-height: 1.35; }
+.driver-readout__text, .info-copy { margin: 0; font-size: 1rem; line-height: 1.35; }
 
 .system-decision {
   display: grid;
@@ -1204,13 +1368,13 @@ body::before {
 
 .reason-structure {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .reason-structure__section {
   display: grid;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 9px 11px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.03);
@@ -1232,7 +1396,7 @@ body::before {
 
 .decision-chain {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   padding-top: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -1240,7 +1404,7 @@ body::before {
 .decision-chain__step {
   display: grid;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 9px 11px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.03);
@@ -1259,7 +1423,7 @@ body::before {
   line-height: 1.35;
 }
 
-.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 
 .metric-card,
 .field,
@@ -1267,13 +1431,452 @@ body::before {
 .kv-item,
 .telemetry-row,
 .warning-item {
-  padding: 16px;
+  padding: 12px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
 }
 
-.metric-card__head { margin-bottom: 14px; font-weight: 600; }
+.metric-card__head { margin-bottom: 10px; font-weight: 600; }
+
+.telemetry-row {
+  position: relative;
+  overflow: hidden;
+  min-height: 46px;
+  padding-left: 26px;
+  align-items: center;
+}
+
+.telemetry-row::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(105, 232, 255, 0.72);
+  box-shadow: 0 0 10px rgba(105, 232, 255, 0.35);
+  animation: dataFlowDot 2.8s ease-in-out infinite;
+}
+
+.telemetry-row::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -40%;
+  width: 34%;
+  background: linear-gradient(90deg, transparent, rgba(105, 232, 255, 0.08), transparent);
+  transform: skewX(-18deg);
+  animation: dataFlowSweep 6.8s linear infinite;
+  pointer-events: none;
+}
+
+.telemetry-row span,
+.telemetry-row strong {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.telemetry-row strong,
+.kv-item strong {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv-item {
+  align-items: center;
+  min-height: 46px;
+}
+
+.kv-item span,
+.kv-item strong,
+.warning-item span,
+.warning-item strong {
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.context-panel .kv-grid {
+  gap: 10px;
+}
+
+.context-panel .kv-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  min-height: 46px;
+  padding: 12px 14px;
+}
+
+.context-panel .kv-item span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.context-panel .kv-item strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: visible;
+  text-align: right;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mqtt-panel {
+  overflow: hidden;
+  transition: border-color 260ms ease, box-shadow 260ms ease, background 260ms ease;
+}
+
+.mqtt-panel::before,
+.system-status-panel::before,
+.telemetry-panel::before,
+.driver-readout::before,
+.context-panel::before,
+.event-timeline-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -28%;
+  width: 22%;
+  background: linear-gradient(90deg, transparent, rgba(var(--state-accent-rgb), 0.085), transparent);
+  opacity: 0;
+  transform: skewX(-18deg);
+  pointer-events: none;
+}
+
+.mqtt-panel[data-mqtt-state="published"] {
+  border-color: rgba(94, 242, 161, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(94, 242, 161, 0.08), 0 0 24px rgba(94, 242, 161, 0.1);
+}
+
+.mqtt-panel[data-mqtt-state="prepared"] {
+  border-color: rgba(255, 184, 77, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(255, 184, 77, 0.08), 0 0 22px rgba(255, 184, 77, 0.08);
+}
+
+.mqtt-panel.is-mqtt-updated #mqtt-last-event,
+.mqtt-panel.is-mqtt-updated #mqtt-status {
+  animation: mqttEventFlash 880ms ease-out;
+}
+
+.mqtt-panel .telemetry-row.is-row-updated {
+  animation: rowUpdatePulse 720ms ease-out;
+}
+
+.mqtt-panel .telemetry-row {
+  min-height: 56px;
+  padding: 13px 16px 13px 30px;
+  gap: 14px;
+}
+
+.mqtt-panel .telemetry-row span,
+.mqtt-panel .telemetry-row strong {
+  line-height: 1.4;
+}
+
+.mqtt-panel.is-dataflow-sync::before,
+.system-status-panel.is-dataflow-sync::before,
+.telemetry-panel.is-dataflow-sync::before,
+.event-timeline-panel.is-dataflow-sync::before {
+  animation: dataflowSyncSweep 680ms ease-out;
+}
+
+.driver-panel.is-driver-sync,
+.driver-readout.is-driver-sync,
+.telemetry-panel.is-driver-sync,
+.system-status-panel.is-driver-sync,
+.event-timeline-panel.is-driver-sync {
+  animation: driverSyncPulse 720ms ease-out;
+}
+
+.driver-readout {
+  position: relative;
+  overflow: hidden;
+}
+
+.driver-readout.is-driver-sync::before {
+  animation: dataflowSyncSweep 720ms ease-out;
+}
+
+.external-source-chip.is-ha-sync,
+.smart-context-chip.is-ha-sync,
+.context-panel.is-ha-sync,
+.system-status-panel.is-ha-sync,
+.event-timeline-panel.is-ha-sync {
+  animation: haSyncPulse 720ms ease-out;
+}
+
+.context-panel.is-ha-sync::before,
+.system-status-panel.is-ha-sync::before,
+.event-timeline-panel.is-ha-sync::before {
+  animation: dataflowSyncSweep 720ms ease-out;
+}
+
+.mqtt-panel #mqtt-payload {
+  font-family: "Rajdhani", monospace;
+  white-space: pre-wrap;
+  padding: 14px 16px;
+  line-height: 1.45;
+  transition: border-color 220ms ease, background 220ms ease;
+}
+
+.mqtt-panel.is-mqtt-updated #mqtt-payload {
+  border-color: rgba(105, 232, 255, 0.18);
+  background: rgba(105, 232, 255, 0.05);
+}
+
+.system-status-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.event-timeline-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.event-timeline {
+  display: grid;
+  gap: 14px;
+}
+
+.event-timeline__item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 62px minmax(78px, 0.7fr) minmax(0, 1.3fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 64px;
+  padding: 14px 16px 14px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  animation: timelineEventIn 360ms ease-out;
+}
+
+.event-timeline__item::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 10px rgba(105, 232, 255, 0.35);
+  transform: translateY(-50%);
+}
+
+.event-timeline__item[data-event-type="state"]::before { background: var(--green); }
+.event-timeline__item[data-event-type="mqtt"]::before { background: var(--cyan); }
+.event-timeline__item[data-event-type="ha"]::before { background: var(--amber); }
+.event-timeline__item[data-event-type="risk"]::before { background: var(--red); }
+
+.event-timeline__item.is-event-new {
+  animation: timelineEventIn 520ms ease-out, timelineItemPulse 760ms ease-out;
+}
+
+.event-timeline__item.is-event-new::before {
+  animation: timelineDotPulse 760ms ease-out;
+}
+
+.event-timeline__time {
+  min-width: 0;
+  color: var(--muted);
+  font-family: "Rajdhani", monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.event-timeline__item strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.94rem;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-timeline__item p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-status-list {
+  display: grid;
+  gap: 14px;
+}
+
+.system-status-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  transition: background 360ms ease, border-color 360ms ease, box-shadow 360ms ease;
+}
+
+.system-status-row__indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(94, 242, 161, 0.5);
+  transition: background 360ms ease, box-shadow 360ms ease, transform 360ms ease;
+}
+
+.system-status-row__label {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-status-row strong {
+  min-width: 0;
+  max-width: 220px;
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telemetry-panel .telemetry-list {
+  gap: 14px;
+}
+
+.telemetry-panel .telemetry-row {
+  min-height: 58px;
+  padding: 14px 16px 14px 30px;
+  gap: 16px;
+}
+
+.telemetry-panel .telemetry-row:nth-child(3),
+.telemetry-panel .telemetry-row:nth-child(4),
+.system-status-row--timestamp {
+  display: none;
+}
+
+.telemetry-panel .telemetry-row span,
+.telemetry-panel .telemetry-row strong {
+  line-height: 1.5;
+}
+
+.intelligence-panel .info-copy {
+  line-height: 1.55;
+}
+
+.intelligence-panel .tag-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.intelligence-panel .tag {
+  min-height: 40px;
+  line-height: 1.2;
+}
+
+.system-status-row[data-status-level="warn"] .system-status-row__indicator {
+  background: var(--amber);
+  box-shadow: 0 0 12px rgba(255, 184, 77, 0.48);
+}
+
+.system-status-row[data-status-level="error"] .system-status-row__indicator {
+  background: var(--red);
+  box-shadow: 0 0 12px rgba(255, 77, 109, 0.5);
+}
+
+.system-status-row--timestamp strong {
+  color: var(--cyan);
+}
+
+.system-status-row.is-runtime-active {
+  border-color: rgba(var(--state-accent-rgb), 0.2);
+  background: rgba(var(--state-accent-rgb), 0.045);
+}
+
+.system-status-panel.is-dataflow-sync .system-status-row--timestamp,
+.system-status-panel.is-driver-sync #runtime-driver-engine-status,
+.system-status-panel.is-ha-sync #runtime-ha-status,
+.mqtt-panel.is-dataflow-sync #mqtt-payload {
+  animation: syncStatusBlink 680ms ease-out;
+}
+
+.context-panel,
+.intelligence-panel,
+.warning-panel,
+.driver-readout,
+.mqtt-panel,
+.system-status-panel,
+.telemetry-panel,
+.mode-panel {
+  transition: border-color 420ms ease, box-shadow 420ms ease, background 420ms ease, filter 260ms ease;
+}
+
+.context-panel.is-system-reacting,
+.intelligence-panel.is-system-reacting,
+.warning-panel.is-system-reacting,
+.driver-readout.is-system-reacting,
+.mqtt-panel.is-system-reacting,
+.system-status-panel.is-system-reacting,
+.telemetry-panel.is-system-reacting,
+.mode-panel.is-system-reacting {
+  animation: systemReactionPulse 900ms ease-out;
+}
+
+.mqtt-panel.is-system-reacting #mqtt-topic,
+.mqtt-panel.is-system-reacting #mqtt-last-event {
+  animation: topicActivityPulse 900ms ease-out;
+}
+
+.context-panel.is-system-reacting .smart-context-chip,
+.intelligence-panel.is-system-reacting .tag,
+.warning-panel.is-system-reacting .warning-item,
+.driver-readout.is-system-reacting .decision-chain__step {
+  animation: linkedAreaPulse 900ms ease-out;
+}
+
+.driver-panel.is-state-panel-shift,
+.mode-panel.is-state-panel-shift,
+.system-status-panel.is-state-panel-shift {
+  animation: statePanelShift 740ms ease-out;
+}
+
+.intelligence-panel[data-reaction-state="kritisch"] {
+  border-color: rgba(255, 77, 109, 0.22);
+}
+
+.intelligence-panel[data-reaction-state="muede"] {
+  border-color: rgba(255, 184, 77, 0.22);
+}
+
+.intelligence-panel[data-reaction-state="wachsam"] {
+  border-color: rgba(94, 242, 161, 0.2);
+}
 
 .meter-line {
   height: 10px;
@@ -1558,6 +2161,7 @@ body.is-state-value-animating .meter-progress {
 .mode-marker__point {
   position: absolute;
   top: 2px;
+  left: 0;
   width: 18px;
   height: 18px;
   border-radius: 50%;
@@ -1566,14 +2170,19 @@ body.is-state-value-animating .meter-progress {
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.08),
     0 0 14px rgba(var(--mode-marker-r), var(--mode-marker-g), var(--mode-marker-b), 0.28);
-  transform: translateX(-50%) scale(1);
-  left: 50%;
+  transform: translateX(var(--mode-marker-x, 0px)) scale(1);
   transition:
-    left 560ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 260ms ease,
+    transform 760ms cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 320ms ease,
     background-color 320ms ease;
-  will-change: left, transform;
+  will-change: transform;
+}
+
+body.is-state-value-animating .mode-marker__point {
+  transition:
+    transform 90ms linear,
+    box-shadow 260ms ease,
+    background-color 260ms ease;
 }
 
 .mode-marker__point::after {
@@ -1624,19 +2233,56 @@ body[data-driver-state="wachsam"] #system-mode-badge {
   box-shadow: inset 0 0 0 1px rgba(94, 242, 161, 0.08), 0 0 14px rgba(94, 242, 161, 0.08);
 }
 
+body[data-driver-state="wachsam"] .driver-panel,
+body[data-driver-state="wachsam"] .mode-panel,
+body[data-driver-state="wachsam"] .system-status-panel {
+  border-color: rgba(94, 242, 161, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(94, 242, 161, 0.035), var(--shadow);
+}
+
+body[data-driver-state="wachsam"] .driver-panel {
+  box-shadow: inset 0 0 0 1px rgba(94, 242, 161, 0.035), var(--shadow) !important;
+}
+
 body[data-driver-state="muede"] #warning-pill,
 body[data-driver-state="muede"] #system-mode-badge {
   animation: badgeSoftPulse 2.8s ease-in-out infinite;
 }
 
+body[data-driver-state="muede"] .driver-panel,
+body[data-driver-state="muede"] .mode-panel,
+body[data-driver-state="muede"] .system-status-panel {
+  border-color: rgba(255, 184, 77, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 184, 77, 0.045), var(--shadow);
+}
+
+body[data-driver-state="muede"] .driver-panel {
+  box-shadow: inset 0 0 0 1px rgba(255, 184, 77, 0.045), var(--shadow) !important;
+}
+
 body[data-driver-state="kritisch"] #warning-pill,
 body[data-driver-state="kritisch"] #system-mode-badge,
 body[data-driver-state="kritisch"] #system-decision {
-  animation: badgeAlertPulse 1.45s ease-in-out infinite;
+  animation: badgeAlertPulse 2.4s ease-in-out infinite;
 }
 
 body[data-driver-state="kritisch"] #system-decision {
   box-shadow: 0 0 0 1px rgba(255, 77, 109, 0.1), 0 0 18px rgba(255, 77, 109, 0.12);
+}
+
+body[data-driver-state="kritisch"] .driver-panel {
+  border-color: rgba(255, 77, 109, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.05), var(--shadow), 0 0 24px rgba(255, 77, 109, 0.055) !important;
+}
+
+body[data-driver-state="kritisch"] .mode-panel,
+body[data-driver-state="kritisch"] .system-status-panel {
+  border-color: rgba(255, 77, 109, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.045), var(--shadow);
+}
+
+body[data-driver-state="kritisch"] .radial-meter__value {
+  animation: criticalValuePulse 2.6s ease-in-out infinite;
 }
 
 .clock-panel__body { align-content: center; }
@@ -1649,6 +2295,11 @@ body[data-driver-state="kritisch"] #system-decision {
   letter-spacing: 0.12em;
 }
 
+#driving-mode-derivation {
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
 .warning-panel { overflow: hidden; }
 .warning-panel::before {
   content: "";
@@ -1659,7 +2310,7 @@ body[data-driver-state="kritisch"] #system-decision {
   opacity: 0.8;
 }
 
-.field { display: grid; gap: 10px; }
+.field { display: grid; gap: 8px; }
 
 .field input,
 .field select {
@@ -1668,7 +2319,7 @@ body[data-driver-state="kritisch"] #system-decision {
   border-radius: 12px;
   background: rgba(4, 9, 15, 0.85);
   color: var(--text);
-  padding: 12px 14px;
+  padding: 10px 12px;
   font: inherit;
 }
 
@@ -1679,7 +2330,7 @@ body[data-driver-state="kritisch"] #system-decision {
   box-shadow: 0 0 0 3px rgba(105, 232, 255, 0.1);
 }
 
-.toggle { display: flex; align-items: center; gap: 12px; }
+.toggle { display: flex; align-items: center; gap: 10px; }
 .toggle input { width: 18px; height: 18px; accent-color: var(--cyan); }
 
 .action-button {
@@ -1688,7 +2339,7 @@ body[data-driver-state="kritisch"] #system-decision {
   border-radius: 14px;
   background: linear-gradient(135deg, rgba(105, 232, 255, 0.2), rgba(79, 124, 255, 0.18));
   color: var(--text);
-  padding: 12px 16px;
+  padding: 10px 14px;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -1728,6 +2379,8 @@ body[data-driver-state="kritisch"] #system-decision {
 .risk-pill:hover,
 .tag:hover,
 .live-chip:hover,
+.debug-toggle:hover,
+.debug-toggle:focus-visible,
 .smart-context-chip:hover,
 .external-source-chip:hover {
   transform: var(--interactive-lift);
@@ -1748,13 +2401,25 @@ body[data-driver-state="kritisch"] #system-decision {
 }
 
 .smart-context-chip {
+  display: block;
+  min-height: 38px;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   padding: 10px 14px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
   font-size: 0.92rem;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.context-badge {
+  max-width: 100%;
 }
 
 .smart-context-chip.is-connected {
@@ -1813,6 +2478,207 @@ body[data-driver-state="kritisch"] #system-decision {
   }
 }
 
+@keyframes criticalPanelGlow {
+  0%, 100% {
+    box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.04), var(--shadow);
+  }
+  50% {
+    box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.08), var(--shadow), 0 0 20px rgba(255, 77, 109, 0.055);
+  }
+}
+
+@keyframes criticalValuePulse {
+  0%, 100% {
+    text-shadow: 0 0 10px rgba(255, 77, 109, 0.18);
+  }
+  50% {
+    text-shadow: 0 0 16px rgba(255, 77, 109, 0.26);
+  }
+}
+
+@keyframes dataFlowDot {
+  0%, 100% {
+    opacity: 0.45;
+    transform: translateY(-50%) scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+}
+
+@keyframes dataFlowSweep {
+  0% {
+    transform: translateX(0) skewX(-18deg);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  42%, 100% {
+    transform: translateX(420%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+@keyframes mqttEventFlash {
+  0% {
+    color: var(--cyan);
+    text-shadow: 0 0 16px rgba(105, 232, 255, 0.42);
+  }
+  100% {
+    color: var(--text);
+    text-shadow: none;
+  }
+}
+
+@keyframes rowUpdatePulse {
+  0% {
+    border-color: rgba(105, 232, 255, 0.18);
+    background: rgba(105, 232, 255, 0.045);
+  }
+  100% {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@keyframes systemReactionPulse {
+  0% {
+    filter: brightness(1.045);
+    box-shadow: inset 0 0 0 1px rgba(var(--state-accent-rgb), 0.1), var(--shadow), 0 0 20px rgba(var(--state-accent-rgb), var(--state-glow-opacity));
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+@keyframes topicActivityPulse {
+  0% {
+    color: var(--cyan);
+    text-shadow: 0 0 14px rgba(105, 232, 255, 0.36);
+  }
+  100% {
+    color: var(--text);
+    text-shadow: none;
+  }
+}
+
+@keyframes linkedAreaPulse {
+  0% {
+    border-color: rgba(var(--state-accent-rgb), 0.22);
+    background: rgba(var(--state-accent-rgb), 0.05);
+  }
+  100% {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@keyframes statePanelShift {
+  0% {
+    transform: translateY(0);
+    border-color: rgba(var(--state-accent-rgb), 0.24);
+    box-shadow: inset 0 0 0 1px rgba(var(--state-accent-rgb), 0.08), var(--shadow), 0 0 22px rgba(var(--state-accent-rgb), var(--state-glow-opacity));
+  }
+  48% {
+    transform: translateY(-1px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes statusActivityTick {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(var(--state-accent-rgb), 0.28);
+  }
+  45% {
+    transform: scale(1.22);
+    box-shadow: 0 0 16px rgba(var(--state-accent-rgb), 0.42);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes dataflowSyncSweep {
+  0% {
+    opacity: 0;
+    transform: translateX(0) skewX(-18deg);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(620%) skewX(-18deg);
+  }
+}
+
+@keyframes driverSyncPulse {
+  0% {
+    border-color: rgba(var(--state-accent-rgb), 0.2);
+    box-shadow: inset 0 0 0 1px rgba(var(--state-accent-rgb), 0.055), var(--shadow);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+@keyframes haSyncPulse {
+  0% {
+    border-color: rgba(255, 184, 77, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 184, 77, 0.055), 0 0 18px rgba(255, 184, 77, 0.065);
+    filter: brightness(1.035);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+@keyframes syncStatusBlink {
+  0% {
+    color: var(--cyan);
+    text-shadow: 0 0 12px rgba(105, 232, 255, 0.26);
+  }
+  100% {
+    text-shadow: none;
+  }
+}
+
+@keyframes timelineEventIn {
+  0% {
+    border-color: rgba(var(--state-accent-rgb), 0.2);
+    background: rgba(var(--state-accent-rgb), 0.05);
+  }
+  100% {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@keyframes timelineItemPulse {
+  0% {
+    box-shadow: inset 0 0 0 1px rgba(var(--state-accent-rgb), 0.08);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+@keyframes timelineDotPulse {
+  0% {
+    transform: translateY(-50%) scale(1);
+    box-shadow: 0 0 8px rgba(var(--state-accent-rgb), 0.24);
+  }
+  45% {
+    transform: translateY(-50%) scale(1.28);
+    box-shadow: 0 0 14px rgba(var(--state-accent-rgb), 0.36);
+  }
+  100% {
+    transform: translateY(-50%) scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .radial-meter,
   .radial-meter::before,
@@ -1821,7 +2687,55 @@ body[data-driver-state="kritisch"] #system-decision {
   #warning-pill,
   #system-mode-badge,
   #system-decision,
-  .mode-marker__point {
+  .mode-marker__point,
+  .telemetry-row::before,
+  .telemetry-row::after,
+  .mqtt-panel.is-mqtt-updated #mqtt-last-event,
+  .mqtt-panel.is-mqtt-updated #mqtt-status,
+  .mqtt-panel.is-system-reacting #mqtt-topic,
+  .mqtt-panel.is-system-reacting #mqtt-last-event,
+  .context-panel.is-system-reacting,
+  .intelligence-panel.is-system-reacting,
+  .warning-panel.is-system-reacting,
+  .driver-readout.is-system-reacting,
+  .mqtt-panel.is-system-reacting,
+  .context-panel.is-system-reacting .smart-context-chip,
+  .intelligence-panel.is-system-reacting .tag,
+  .warning-panel.is-system-reacting .warning-item,
+  .driver-readout.is-system-reacting .decision-chain__step,
+  .driver-panel.is-state-panel-shift,
+  .mode-panel.is-state-panel-shift,
+  .system-status-panel.is-state-panel-shift,
+  .mqtt-panel.is-dataflow-sync::before,
+  .system-status-panel.is-dataflow-sync::before,
+  .telemetry-panel.is-dataflow-sync::before,
+  .event-timeline-panel.is-dataflow-sync::before,
+  .driver-readout.is-driver-sync::before,
+  .context-panel.is-ha-sync::before,
+  .system-status-panel.is-ha-sync::before,
+  .event-timeline-panel.is-ha-sync::before,
+  .driver-panel.is-driver-sync,
+  .driver-readout.is-driver-sync,
+  .telemetry-panel.is-driver-sync,
+  .system-status-panel.is-driver-sync,
+  .event-timeline-panel.is-driver-sync,
+  .external-source-chip.is-ha-sync,
+  .smart-context-chip.is-ha-sync,
+  .context-panel.is-ha-sync,
+  .system-status-panel.is-ha-sync,
+  .event-timeline-panel.is-ha-sync,
+  .system-status-panel.is-dataflow-sync .system-status-row--timestamp,
+  .system-status-panel.is-driver-sync #runtime-driver-engine-status,
+  .system-status-panel.is-ha-sync #runtime-ha-status,
+  .mqtt-panel.is-dataflow-sync #mqtt-payload,
+  .event-timeline__item,
+  .event-timeline__item.is-event-new,
+  .event-timeline__item.is-event-new::before,
+  .mqtt-panel .telemetry-row.is-row-updated,
+  body.is-dashboard-transitioning .status-dot,
+  body.is-dashboard-transitioning .system-status-row__indicator,
+  body[data-driver-state="kritisch"] .driver-panel,
+  body[data-driver-state="kritisch"] .radial-meter__value {
     animation: none !important;
     transition-duration: 0ms !important;
   }
@@ -1858,15 +2772,43 @@ body[data-driver-state="kritisch"] #system-decision {
 @media (max-width: 1300px) {
   .dashboard { grid-template-columns: 1fr 1fr; }
   .panel--hero, .warning-panel, .telemetry-panel, .simulation-panel { grid-column: span 2; }
+  .context-panel .panel__header {
+    flex-wrap: wrap;
+  }
+  .context-panel .smart-context-chip {
+    max-width: 100%;
+  }
 }
 
 @media (max-width: 760px) {
   .shell { padding: 16px; }
   .topbar { flex-direction: column; align-items: flex-start; gap: 18px; }
   .topbar__status, .button-row { flex-wrap: wrap; }
+  .debug-overlay {
+    top: auto;
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    width: auto;
+  }
   .day-night-feature { min-width: 100%; width: 100%; }
   .dashboard { grid-template-columns: 1fr; }
-  .panel--hero, .warning-panel, .telemetry-panel, .simulation-panel { grid-column: span 1; }
+  .panel--hero,
+  .warning-panel,
+  .telemetry-panel,
+  .simulation-panel,
+  .system-status-panel,
+  .event-timeline-panel,
+  .mqtt-panel,
+  .intelligence-panel {
+    grid-column: span 1;
+  }
+  .event-timeline__item {
+    grid-template-columns: 54px minmax(0, 1fr);
+  }
+  .event-timeline__item p {
+    grid-column: 2;
+  }
   .radial-cluster, .metric-grid { grid-template-columns: 1fr; }
   .radial-meter { width: min(72vw, 250px); }
   .scan-modal__body { grid-template-columns: 1fr; }

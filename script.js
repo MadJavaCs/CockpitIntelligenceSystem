@@ -1,6 +1,7 @@
 const BACKEND_ENDPOINT = "/api/dashboard-state";
 const HOME_ASSISTANT_ENDPOINT = "/api/home-assistant-context";
 const HOME_ASSISTANT_TRIGGER_ENDPOINT = "http://127.0.0.1:8001/trigger-home-assistant";
+const MQTT_LAST_EVENT_ENDPOINT = "http://127.0.0.1:8001/mqtt/last-event";
 
 const FALLBACK_DATA = {
   system: {
@@ -21,7 +22,7 @@ const FALLBACK_DATA = {
     isNight: true,
     timeSource: "system_time",
     homeAssistantConnected: false,
-    smartContextStatus: "Smart Context: Local Context Only",
+    smartContextStatus: "Smart Context: Local Sync",
     route: "A8 Urban Exit",
     traffic: "Moderat",
     homeAssistant: "Naechster Termin 10:00",
@@ -35,7 +36,7 @@ const FALLBACK_DATA = {
     cameraStatus: "Eyes On Road",
     wheelContact: "Stable",
     cabinState: "Low Noise",
-    inputSummary: "Context-sensitive adaptation active",
+    inputSummary: "Context adaptation active",
   },
   assessment: {
     driverState: "Muede",
@@ -61,17 +62,15 @@ const FALLBACK_DATA = {
   },
 };
 
-const DRIVING_MODE_MARKER_POSITIONS = {
-  komfort: 18,
-  adaptiv: 50,
-  warnmodus: 82,
-};
-
 let currentDataset = null;
 let baseSystemDataset = null;
 let scanAnimationFrame = null;
 let lastHomeAssistantTriggerKey = null;
 let previousRenderedRiskScore = null;
+let backendRuntimeState = "online";
+let mqttRuntimeState = "simulated";
+let lastDebugEventTime = "-";
+let runtimeEvents = [];
 let stateValueAnimation = {
   frameId: null,
   completionTimer: null,
@@ -291,10 +290,67 @@ function deriveAwarenessBoostState(heartRateState, criticalManeuver) {
   };
 }
 
-function deriveDriverStateFromRisk(riskScore) {
-  const safeRiskScore = sanitizePercent(riskScore);
+function deriveNightRiskModifier(isNight, energy, focus) {
+  if (!isNight) return 0;
+  return energy <= 50 || focus <= 50 ? 6 : 4;
+}
 
-  if (safeRiskScore >= 65) {
+function deriveWeatherRiskModifier(weather, stress, focus) {
+  const weatherLabel = String(weather || "").trim().toLowerCase();
+
+  if (weatherLabel.includes("sturm")) return 10;
+  if (weatherLabel.includes("nebel")) return focus < 60 ? 8 : 6;
+  if (weatherLabel.includes("regen")) return stress >= 65 ? 6 : 4;
+  if (weatherLabel.includes("wind")) return 3;
+  return 0;
+}
+
+function deriveDriverStateFromRisk(riskScore, options = {}) {
+  const safeRiskScore = sanitizePercent(riskScore);
+  const stress = sanitizePercent(options.stress ?? 50);
+  const energy = sanitizePercent(options.energy ?? 60);
+  const focus = sanitizePercent(options.focus ?? 60);
+  const previousState = String(options.previousState || "").trim().toLowerCase();
+  const riskTrend = options.riskTrend || "stable";
+  const isRising = riskTrend === "rising";
+  const isFalling = riskTrend === "falling" || riskTrend === "decreasing";
+  const heartRateState = String(options.heartRateState || "normal").trim().toLowerCase();
+  const weatherLabel = String(options.weather || "").trim().toLowerCase();
+  const isNight = Boolean(options.isNight);
+  let contextPressure = 0;
+
+  if (stress >= 75) contextPressure += 5;
+  if (energy <= 35) contextPressure += 5;
+  if (focus <= 40) contextPressure += 6;
+  if (heartRateState === "kritisch erhoeht") contextPressure += 8;
+  else if (heartRateState === "erhoeht") contextPressure += 5;
+  if (isNight) contextPressure += 4;
+  if (weatherLabel.includes("nebel")) contextPressure += 4;
+
+  const effectiveRisk = sanitizePercent(safeRiskScore + contextPressure);
+  const severeSignal = stress >= 82 || focus <= 30 || heartRateState === "kritisch erhoeht";
+  const fatigueSignal = energy <= 42 && focus <= 55;
+  let state = "Wachsam";
+
+  if (previousState === "kritisch") {
+    state = safeRiskScore >= 58 || severeSignal || (effectiveRisk >= 62 && !isFalling)
+      ? "Kritisch"
+      : safeRiskScore >= 35 || fatigueSignal
+        ? "Muede"
+        : "Wachsam";
+  } else if (previousState === "muede") {
+    state = effectiveRisk >= 68 && (isRising || severeSignal)
+      ? "Kritisch"
+      : safeRiskScore >= 30 || fatigueSignal || (isNight && weatherLabel.includes("nebel"))
+        ? "Muede"
+        : "Wachsam";
+  } else if (effectiveRisk >= 68 && (isRising || severeSignal || safeRiskScore >= 72)) {
+    state = "Kritisch";
+  } else if (effectiveRisk >= 38 || fatigueSignal) {
+    state = "Muede";
+  }
+
+  if (state === "Kritisch") {
     return {
       riskScore: safeRiskScore,
       state: "Kritisch",
@@ -304,7 +360,7 @@ function deriveDriverStateFromRisk(riskScore) {
     };
   }
 
-  if (safeRiskScore >= 35) {
+  if (state === "Muede") {
     return {
       riskScore: safeRiskScore,
       state: "Muede",
@@ -507,29 +563,176 @@ function deriveSystemDecisionReason(dataset, derivedState, riskContext) {
 
 function deriveDrivingModePresentation(riskScore) {
   const safeRiskScore = sanitizePercent(riskScore);
+  const markerPosition = Math.max(4, Math.min(96, safeRiskScore));
 
   if (safeRiskScore >= 65) {
     return {
       mode: "Warnmodus",
-      markerPosition: DRIVING_MODE_MARKER_POSITIONS.warnmodus,
+      markerPosition,
     };
   }
 
   if (safeRiskScore >= 35) {
     return {
       mode: "Adaptiv",
-      markerPosition: DRIVING_MODE_MARKER_POSITIONS.adaptiv,
+      markerPosition,
     };
   }
 
   return {
     mode: "Komfort",
-    markerPosition: DRIVING_MODE_MARKER_POSITIONS.komfort,
+    markerPosition,
   };
 }
 
 function deriveDrivingModeFromRisk(riskScore) {
   return deriveDrivingModePresentation(riskScore).mode;
+}
+
+function formatDrivingModeDecision(riskIndex, driverState, drivingMode) {
+  const stateLabel = {
+    muede: "Müde",
+    mude: "Müde",
+    wachsam: "Wachsam",
+    kritisch: "Kritisch",
+  }[String(driverState || "").trim().toLowerCase()] || driverState || "Wachsam";
+  const modeLabel = String(drivingMode || "Komfort").toLowerCase().includes("modus")
+    ? drivingMode
+    : `${drivingMode}modus`;
+  return `Risk Index ${riskIndex} • ${stateLabel} • ${modeLabel} aktiv`;
+}
+
+function deriveSystemCoupling(dataset, derivedState, riskContext, riskTrend) {
+  const context = dataset?.context || {};
+  const assessment = dataset?.assessment || {};
+  const homeAssistantConnected = Boolean(context.homeAssistantConnected)
+    || context.timeSource === "home_assistant";
+  const stateKey = String(derivedState?.state || "").trim().toLowerCase();
+  const riskIndex = sanitizePercent(riskContext?.finalRisk ?? assessment.riskScore);
+  const drivingMode = assessment.mode || deriveDrivingModeFromRisk(riskIndex);
+  const driverStateLabel = derivedState?.state || "Wachsam";
+  const trendKey = riskTrend?.key || "stable";
+  const hasCriticalManeuver = assessment.criticalManeuverImpact > 0;
+  const focus = sanitizePercent(dataset?.telemetry?.focus);
+  const hasLowFocus = focus < 60;
+  const syncMode = homeAssistantConnected ? "HA Sync" : "Local Sync";
+  const triggerReason = assessment.triggerReason
+    || (stateKey === "kritisch"
+      ? `Risk ${riskIndex}: kritischer Zustand`
+      : hasLowFocus
+        ? `Risk ${riskIndex}: niedriger Focus`
+        : riskIndex >= 35
+          ? `Risk ${riskIndex}: mittlere Belastung`
+          : `Risk ${riskIndex}: stabiler Zustand`);
+  const attentionStrategy = hasLowFocus ? "Focus Guidance" : "Attention Support";
+
+  if (stateKey === "kritisch") {
+    return {
+      stateKey,
+      riskIndex,
+      drivingMode,
+      supportLevel: "Intervention",
+      strategy: hasCriticalManeuver ? "Intervention Support + Maneuver Guard" : "Intervention Support",
+      eventPriority: "High",
+      syncMode,
+      mqttTopic: "porsche/driver/state/critical",
+      mqttStatus: "MQTT Prepared: Critical",
+      homeAssistantStatus: homeAssistantConnected ? "HA Sync: Intervention" : "HA Standby",
+      homeAssistantLevel: homeAssistantConnected ? "error" : "warn",
+      warningTrigger: `${syncMode} / ${triggerReason}`,
+      linkedSummary: formatDrivingModeDecision(riskIndex, driverStateLabel, drivingMode),
+      recommendation: "Assistenz eskalieren, visuelle Warnung aktiv halten und Pause unmittelbar priorisieren.",
+      warningAction: "Intervention aktiv: Pause oder Fahrerwechsel priorisieren",
+      aiSummary: `Risk ${riskIndex} aktiviert Intervention ueber ${syncMode}.`,
+      coffeeRecommendation: "Break",
+      lightMode: "Warnlicht",
+      triggerReason,
+    };
+  }
+
+  if (stateKey === "muede") {
+    return {
+      stateKey,
+      riskIndex,
+      drivingMode,
+      supportLevel: "Assist",
+      strategy: hasCriticalManeuver ? `${attentionStrategy} + Maneuver Guard` : attentionStrategy,
+      eventPriority: trendKey === "rising" ? "Medium High" : "Medium",
+      syncMode,
+      mqttTopic: "porsche/driver/state/attention",
+      mqttStatus: "MQTT Prepared: Attention",
+      homeAssistantStatus: homeAssistantConnected ? "HA Sync: Assist" : "HA Standby",
+      homeAssistantLevel: homeAssistantConnected ? "warn" : "warn",
+      warningTrigger: `${syncMode} / ${triggerReason}`,
+      linkedSummary: formatDrivingModeDecision(riskIndex, driverStateLabel, drivingMode),
+      recommendation: "Aufmerksamkeit stabilisieren, Reizdichte reduzieren und Pause frueh pruefen.",
+      warningAction: "Assistenz aktiv: Fokus sichern und Pausenfenster beobachten",
+      aiSummary: `Risk ${riskIndex} aktiviert Attention Support ueber ${syncMode}.`,
+      coffeeRecommendation: "Optional",
+      lightMode: "Aktivierungslicht",
+      triggerReason,
+    };
+  }
+
+  return {
+    stateKey,
+    riskIndex,
+    drivingMode,
+    supportLevel: "Monitor",
+    strategy: "Passive Monitoring",
+    eventPriority: "Low",
+    syncMode,
+    mqttTopic: "porsche/driver/state/normal",
+    mqttStatus: "MQTT Prepared: Normal",
+    homeAssistantStatus: homeAssistantConnected ? "HA Sync: Context" : "HA Standby",
+    homeAssistantLevel: homeAssistantConnected ? "ok" : "warn",
+    warningTrigger: `${syncMode} / ${triggerReason}`,
+    linkedSummary: formatDrivingModeDecision(riskIndex, driverStateLabel, drivingMode),
+    recommendation: "Stabilen Zustand passiv beobachten und Komfortmodus beibehalten.",
+    warningAction: "Monitoring fortsetzen",
+    aiSummary: `Risk ${riskIndex} bleibt im Monitoring ueber ${syncMode}.`,
+    coffeeRecommendation: "Not needed",
+    lightMode: "Komfortlicht",
+    triggerReason,
+  };
+}
+
+function applySystemCouplingToDataset(dataset, coupling) {
+  return {
+    ...dataset,
+    system: {
+      ...dataset.system,
+      systemLabel: coupling.supportLevel === "Intervention"
+        ? "System: Intervention Active"
+        : coupling.supportLevel === "Assist"
+          ? "System: Assist Active"
+          : dataset.system?.systemLabel || "System Online",
+    },
+    context: {
+      ...dataset.context,
+      smartContextStatus: dataset.context?.homeAssistantConnected
+        ? `Smart Context: ${coupling.homeAssistantStatus}`
+        : "Smart Context: Local Sync",
+    },
+    telemetry: {
+      ...dataset.telemetry,
+      inputSummary: `${dataset.telemetry?.inputSummary || "Context adaptation active"} / Support ${coupling.supportLevel}`,
+    },
+    assessment: {
+      ...dataset.assessment,
+      mode: coupling.drivingMode,
+      recommendation: coupling.recommendation,
+      warningAction: coupling.warningAction,
+      warningTrigger: coupling.warningTrigger,
+      aiSummary: coupling.aiSummary,
+      coffeeRecommendation: coupling.coffeeRecommendation,
+      lightMode: coupling.lightMode,
+      supportStrategy: coupling.strategy,
+      supportLevel: coupling.supportLevel,
+      eventPriority: coupling.eventPriority,
+      triggerReason: coupling.triggerReason,
+    },
+  };
 }
 
 function animateStateTransition(elementId, nextStateKey) {
@@ -549,6 +752,61 @@ function animateStateTransition(elementId, nextStateKey) {
   window.setTimeout(() => element.classList.remove("is-state-shift"), 460);
 }
 
+function pulseDataflowActivity(selectors, className = "is-dataflow-sync", duration = 680) {
+  selectors.forEach((selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return;
+
+    node.classList.remove(className);
+    void node.offsetWidth;
+    node.classList.add(className);
+    window.setTimeout(() => node.classList.remove(className), duration);
+  });
+}
+
+function animateDashboardStateTransition(driverState, riskTrendKey) {
+  const stateKey = String(driverState || "").trim().toLowerCase();
+  const transitionLevel = riskTrendKey === "stable" ? "state" : riskTrendKey;
+
+  document.body.dataset.transitionLevel = transitionLevel;
+  document.body.classList.remove("is-dashboard-transitioning");
+  void document.body.offsetWidth;
+  document.body.classList.add("is-dashboard-transitioning");
+  window.setTimeout(() => document.body.classList.remove("is-dashboard-transitioning"), 760);
+
+  document.querySelectorAll(".system-status-row").forEach((row) => {
+    row.classList.remove("is-runtime-active");
+    void row.offsetWidth;
+    row.classList.add("is-runtime-active");
+    window.setTimeout(() => row.classList.remove("is-runtime-active"), 760);
+  });
+
+  const stateTargets = [
+    ".driver-panel",
+    ".mode-panel",
+    ".system-status-panel",
+  ];
+
+  stateTargets.forEach((selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return;
+
+    node.dataset.reactionState = stateKey || "wachsam";
+    node.classList.remove("is-state-panel-shift");
+    void node.offsetWidth;
+    node.classList.add("is-state-panel-shift");
+    window.setTimeout(() => node.classList.remove("is-state-panel-shift"), 760);
+  });
+
+  pulseDataflowActivity([
+    ".driver-panel",
+    ".driver-readout",
+    ".telemetry-panel",
+    ".system-status-panel",
+    ".event-timeline-panel",
+  ], "is-driver-sync", 720);
+}
+
 function setText(id, value) {
   const node = document.getElementById(id);
   if (node) node.textContent = value;
@@ -565,23 +823,318 @@ function setMetric(valueId, barId, value) {
   setBar(barId, safeValue);
 }
 
-function triggerHomeAssistantAction(drivingMode, driverState) {
-  const triggerKey = `${drivingMode || "-"}|${driverState || "-"}`;
+function setRuntimeStatusRow(id, label, level) {
+  setText(id, label);
+
+  const row = document.getElementById(id)?.closest(".system-status-row");
+  if (row) row.dataset.statusLevel = level;
+}
+
+function formatRuntimeSyncTime(date = new Date()) {
+  return date.toLocaleTimeString("de-DE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[char]));
+}
+
+function renderEventTimeline() {
+  const timeline = document.getElementById("event-timeline");
+  if (!timeline) return;
+
+  timeline.innerHTML = runtimeEvents.slice(0, 3).map((event) => `
+    <div class="event-timeline__item" data-event-type="${escapeHtml(event.type)}">
+      <span class="event-timeline__time">${escapeHtml(event.time)}</span>
+      <strong>${escapeHtml(event.label)}</strong>
+      <p>${escapeHtml(event.detail)}</p>
+    </div>
+  `).join("");
+
+  const latestItem = timeline.querySelector(".event-timeline__item");
+  if (latestItem) {
+    latestItem.classList.add("is-event-new");
+    window.setTimeout(() => latestItem.classList.remove("is-event-new"), 760);
+  }
+}
+
+function pushRuntimeEvent(type, label, detail) {
+  const nextEvent = {
+    type,
+    label,
+    detail,
+    time: formatRuntimeSyncTime(),
+  };
+  const previous = runtimeEvents[0];
+
+  if (previous && previous.type === nextEvent.type && previous.label === nextEvent.label && previous.detail === nextEvent.detail) {
+    previous.time = nextEvent.time;
+  } else {
+    runtimeEvents = [nextEvent, ...runtimeEvents].slice(0, 5);
+  }
+
+  renderEventTimeline();
+}
+
+function renderRuntimeStatus(dataset, derivedState, coupling = {}) {
+  const backendOnline = backendRuntimeState === "online";
+  const homeAssistantOnline = Boolean(dataset?.context?.homeAssistantConnected)
+    || dataset?.context?.timeSource === "home_assistant";
+  const driverEngineActive = Boolean(derivedState?.state);
+  const mqttStatus = mqttRuntimeState === "published"
+    ? { label: "MQTT Live", level: "ok" }
+    : mqttRuntimeState === "prepared"
+      ? { label: "MQTT Prepared", level: "warn" }
+      : { label: "MQTT Simulated", level: "warn" };
+
+  setRuntimeStatusRow("runtime-backend-status", backendOnline ? "Backend Online" : "Backend Offline", backendOnline ? "ok" : "error");
+  setRuntimeStatusRow(
+    "runtime-ha-status",
+    coupling.homeAssistantStatus || (homeAssistantOnline ? "HA Sync: Connected" : "HA Standby"),
+    coupling.homeAssistantLevel || (homeAssistantOnline ? "ok" : "warn"),
+  );
+  setRuntimeStatusRow("runtime-mqtt-status", coupling.mqttStatus || mqttStatus.label, mqttStatus.level);
+  setRuntimeStatusRow("runtime-driver-engine-status", driverEngineActive ? "Engine Active" : "Engine Degraded", driverEngineActive ? "ok" : "error");
+  setRuntimeStatusRow("runtime-last-sync", formatRuntimeSyncTime(), backendOnline ? "ok" : "warn");
+}
+
+function updateDebugOverlay({
+  driverState,
+  riskIndex,
+  drivingMode,
+  homeAssistantConnected,
+  mqttTopic,
+  lastEventTime,
+} = {}) {
+  setText("debug-driver-state", driverState || "-");
+  setText("debug-risk-index", riskIndex ?? "-");
+  setText("debug-driving-mode", drivingMode || "-");
+  if (typeof homeAssistantConnected === "boolean") {
+    setText("debug-ha-status", homeAssistantConnected ? "HA Sync" : "HA Standby");
+  }
+  setText("debug-mqtt-topic", mqttTopic || document.getElementById("mqtt-topic")?.textContent || "-");
+  setText("debug-last-event-time", lastEventTime || lastDebugEventTime || "-");
+}
+
+function renderMqttEventBus(driverState, drivingMode, riskIndex, event = {}) {
+  const payload = event.payload || {
+    driverState,
+    drivingMode,
+    riskIndex,
+    timestamp: new Date().toISOString(),
+  };
+  lastDebugEventTime = payload.timestamp
+    ? formatRuntimeSyncTime(new Date(payload.timestamp))
+    : formatRuntimeSyncTime();
+
+  setText("mqtt-status", event.status || "MQTT Simulated");
+  setText("mqtt-topic", event.topic || "porsche/driver/state");
+  setText("mqtt-last-event", payload.driverState || driverState);
+  setText("mqtt-payload", JSON.stringify(payload, null, 2));
+  pushRuntimeEvent(
+    "mqtt",
+    "MQTT Event",
+    `${event.topic || "porsche/driver/state"} / ${payload.driverState || driverState} / Risk ${payload.riskIndex ?? riskIndex}`,
+  );
+  updateDebugOverlay({
+    driverState: payload.driverState || driverState,
+    riskIndex: payload.riskIndex ?? riskIndex,
+    drivingMode: payload.drivingMode || drivingMode,
+    mqttTopic: event.topic || "porsche/driver/state",
+    lastEventTime: lastDebugEventTime,
+  });
+
+  const mqttPanel = document.querySelector(".mqtt-panel");
+  if (mqttPanel) {
+    const mqttStatus = String(event.status || "");
+    mqttRuntimeState = mqttStatus ? (mqttStatus.includes("Published") ? "published" : "prepared") : "simulated";
+    mqttPanel.dataset.mqttState = mqttRuntimeState;
+    const runtimeMqttStatus = mqttRuntimeState === "published"
+      ? { label: "MQTT Live", level: "ok" }
+      : mqttRuntimeState === "prepared"
+        ? { label: event.status || "MQTT Prepared", level: "warn" }
+        : { label: "MQTT Simulated", level: "warn" };
+    setRuntimeStatusRow("runtime-mqtt-status", runtimeMqttStatus.label, runtimeMqttStatus.level);
+    setRuntimeStatusRow("runtime-last-sync", formatRuntimeSyncTime(), "ok");
+    pulseDataflowActivity([
+      ".mqtt-panel",
+      ".system-status-panel",
+      ".telemetry-panel",
+      ".event-timeline-panel",
+    ], "is-dataflow-sync", 680);
+    mqttPanel.classList.remove("is-mqtt-updated");
+    void mqttPanel.offsetWidth;
+    mqttPanel.classList.add("is-mqtt-updated");
+    const mqttRows = mqttPanel.querySelectorAll(".telemetry-row");
+    mqttRows.forEach((row) => {
+      row.classList.remove("is-row-updated");
+      void row.offsetWidth;
+      row.classList.add("is-row-updated");
+      window.setTimeout(() => row.classList.remove("is-row-updated"), 760);
+    });
+    window.setTimeout(() => mqttPanel.classList.remove("is-mqtt-updated"), 900);
+  }
+}
+
+function applyBackendMqttEvent(mqttEvent) {
+  if (!mqttEvent?.payload) return;
+
+  const statusLabel = mqttEvent.sent
+    ? "MQTT Live: Published"
+    : mqttEvent.lastError
+      ? "MQTT Prepared: Not sent"
+      : "MQTT Prepared";
+
+  renderMqttEventBus(
+    mqttEvent.payload.driverState,
+    mqttEvent.payload.drivingMode,
+    mqttEvent.payload.riskIndex,
+    {
+      payload: mqttEvent.payload,
+      topic: mqttEvent.topic,
+      status: statusLabel,
+    },
+  );
+
+  if (mqttEvent.lastError) {
+    pushRuntimeEvent("mqtt", "MQTT Prepared", mqttEvent.lastError);
+  }
+}
+
+function applyBackendTriggerStatus(result) {
+  const haStatus = result?.homeAssistantStatus;
+  const mqttStatus = result?.mqttStatus;
+
+  if (haStatus) {
+    const isHaOk = Boolean(haStatus.ok);
+    const label = isHaOk
+      ? "HA Trigger: Sent"
+      : haStatus.status === "not_configured"
+        ? "HA Not Configured"
+        : haStatus.status === "timeout"
+          ? "HA Timeout"
+          : "HA Unreachable";
+    setRuntimeStatusRow("runtime-ha-status", label, isHaOk ? "ok" : "error");
+    if (haStatus.lastError) {
+      pushRuntimeEvent("ha", "HA Error", haStatus.lastError);
+    }
+  }
+
+  if (mqttStatus) {
+    const isMqttOk = Boolean(mqttStatus.sent);
+    setRuntimeStatusRow(
+      "runtime-mqtt-status",
+      isMqttOk ? "MQTT Live" : "MQTT Prepared",
+      isMqttOk ? "ok" : "warn",
+    );
+  }
+}
+
+async function refreshBackendMqttEvent() {
+  const response = await fetch(MQTT_LAST_EVENT_ENDPOINT, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) return;
+
+  const result = await response.json();
+  applyBackendMqttEvent(result.mqtt);
+}
+
+function triggerSystemReactionActivity(driverState, riskTrendKey) {
+  const stateKey = String(driverState || "").trim().toLowerCase();
+  const reactionTargets = [
+    ".mqtt-panel",
+    ".context-panel",
+    ".intelligence-panel",
+    ".warning-panel",
+    ".driver-readout",
+    ".system-status-panel",
+    ".telemetry-panel",
+    ".mode-panel",
+  ];
+
+  reactionTargets.forEach((selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return;
+
+    node.dataset.reactionState = stateKey || "wachsam";
+    node.dataset.riskTrend = riskTrendKey || "stable";
+    node.classList.remove("is-system-reacting");
+    void node.offsetWidth;
+    node.classList.add("is-system-reacting");
+    window.setTimeout(() => node.classList.remove("is-system-reacting"), 920);
+  });
+}
+
+function triggerHomeAssistantAction(drivingMode, driverState, riskIndex, coupling = {}) {
+  const riskBand = Math.floor(sanitizePercent(riskIndex) / 10) * 10;
+  const triggerKey = [
+    String(driverState || "-").trim().toLowerCase(),
+    riskBand,
+    coupling.eventPriority || "-",
+  ].join("|");
+
+  if (!lastHomeAssistantTriggerKey) {
+    lastHomeAssistantTriggerKey = triggerKey;
+    return;
+  }
 
   if (triggerKey === lastHomeAssistantTriggerKey) return;
   lastHomeAssistantTriggerKey = triggerKey;
+  pushRuntimeEvent(
+    "ha",
+    "HA Trigger",
+    `${coupling.homeAssistantStatus || "Home Assistant"} / ${driverState} / Risk ${riskIndex}`,
+  );
+  pulseDataflowActivity([
+    "#external-source-chip",
+    "#smart-context-status",
+    ".context-panel",
+    ".system-status-panel",
+    ".event-timeline-panel",
+  ], "is-ha-sync", 720);
 
   fetch(HOME_ASSISTANT_TRIGGER_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify({
       drivingMode,
       driverState,
+      riskIndex,
+      supportStrategy: coupling.strategy,
+      triggerReason: coupling.triggerReason,
+      eventPriority: coupling.eventPriority,
+      syncMode: coupling.syncMode,
     }),
+  }).then(async (response) => {
+    if (response.ok) {
+      const result = await response.json();
+      applyBackendTriggerStatus(result);
+      applyBackendMqttEvent(result.mqtt);
+      return;
+    }
+
+    await refreshBackendMqttEvent();
   }).catch((error) => {
     console.info("Home Assistant trigger failed:", error.message);
+    refreshBackendMqttEvent().catch((refreshError) => {
+      console.info("MQTT event refresh failed:", refreshError.message);
+    });
   });
 }
 
@@ -695,7 +1248,14 @@ function setModeMarker(riskScore) {
   if (!marker) return;
 
   const { markerPosition, mode } = deriveDrivingModePresentation(riskScore);
-  marker.style.left = `${markerPosition}%`;
+  const trackWidth = markerTrack?.clientWidth || 0;
+  const markerWidth = marker.offsetWidth || 18;
+  const travelWidth = Math.max(0, trackWidth - markerWidth);
+  const markerX = trackWidth > 0
+    ? (travelWidth * markerPosition) / 100
+    : 0;
+
+  marker.style.setProperty("--mode-marker-x", `${markerX}px`);
   if (markerTrack) {
     markerTrack.dataset.drivingMode = String(mode || "").trim().toLowerCase();
   }
@@ -884,27 +1444,15 @@ function isTooSimilarToPrevious(metrics, previousMetrics) {
   );
 }
 
-function calculateBaselineRisk(stress, energy, focus, criticalManeuver, weather, randomOffset, hasExternalWeather) {
+function calculateBaselineRisk(stress, energy, focus, criticalManeuver, weather, isNight, randomOffset) {
   const stressComponent = Number((stress * 0.45).toFixed(1));
   const energyComponent = Number(((100 - energy) * 0.35).toFixed(1));
   const focusComponent = Number(((100 - focus) * 0.2).toFixed(1));
   const distraction = deriveDistractionState(focus);
   const maneuverState = deriveCriticalManeuverState(criticalManeuver);
   const offset = Math.max(-5, Math.min(5, Number.isFinite(randomOffset) ? Number(randomOffset) : randomInt(-5, 5)));
-  const weatherLabel = String(weather || "").toLowerCase();
-  let weatherImpact = 0;
-
-  if (hasExternalWeather) {
-    if (weatherLabel.includes("sturm")) {
-      weatherImpact = 10;
-    } else if (weatherLabel.includes("nebel")) {
-      weatherImpact = 8;
-    } else if (weatherLabel.includes("regen")) {
-      weatherImpact = 6;
-    } else if (weatherLabel.includes("wind")) {
-      weatherImpact = 4;
-    }
-  }
+  const nightModifier = deriveNightRiskModifier(isNight, energy, focus);
+  const weatherImpact = deriveWeatherRiskModifier(weather, stress, focus);
 
   const baselineRisk = sanitizePercent(
     Math.round(
@@ -912,6 +1460,7 @@ function calculateBaselineRisk(stress, energy, focus, criticalManeuver, weather,
       + energyComponent
       + focusComponent
       + distraction.riskModifier
+      + nightModifier
       + maneuverState.riskModifier
       + offset
       + weatherImpact,
@@ -926,21 +1475,28 @@ function calculateBaselineRisk(stress, energy, focus, criticalManeuver, weather,
     distraction,
     maneuverState,
     offset,
+    nightModifier,
     weatherImpact,
   };
 }
 
-function calculateProfileRisk(stress, energy, focus, heartRate, drivingContext, criticalManeuver, isNight, weather, randomOffset, hasExternalWeather) {
+function calculateProfileRisk(stress, energy, focus, heartRate, drivingContext, criticalManeuver, isNight, weather, randomOffset) {
   const baseline = calculateBaselineRisk(
     stress,
     energy,
     focus,
     criticalManeuver,
     weather,
+    isNight,
     randomOffset,
-    hasExternalWeather,
   );
-  const baselineState = deriveDriverStateFromRisk(baseline.baselineRisk);
+  const baselineState = deriveDriverStateFromRisk(baseline.baselineRisk, {
+    stress,
+    energy,
+    focus,
+    isNight,
+    weather,
+  });
   const parsedHeartRate = Number(heartRate);
   const consistentHeartRate = Number.isFinite(parsedHeartRate)
     ? sanitizeHeartRate(parsedHeartRate)
@@ -958,6 +1514,7 @@ function calculateProfileRisk(stress, energy, focus, heartRate, drivingContext, 
       + baseline.energyComponent
       + baseline.focusComponent
       + baseline.distraction.riskModifier
+      + baseline.nightModifier
       + heartRateSensor.riskModifier
       + baseline.maneuverState.riskModifier
       + awarenessBoost.riskModifier
@@ -990,8 +1547,9 @@ function calculateProfileRisk(stress, energy, focus, heartRate, drivingContext, 
     awarenessBoostImpact: awarenessBoost.riskModifier,
     awarenessBoostAnalysis: awarenessBoost.analysisLabel,
     awarenessBoostLabel: awarenessBoost.label,
+    nightModifier: baseline.nightModifier,
     weatherImpact: baseline.weatherImpact,
-    formulaText: `Stress ${baseline.stressComponent.toFixed(1)} + Energy ${baseline.energyComponent.toFixed(1)} + Focus ${baseline.focusComponent.toFixed(1)} + Ablenkung ${baseline.distraction.riskModifier >= 0 ? "+" : ""}${baseline.distraction.riskModifier} + Herzfrequenz ${heartRateSensor.riskModifier >= 0 ? "+" : ""}${heartRateSensor.riskModifier}${baseline.maneuverState.riskModifier > 0 ? ` + Manoever ${baseline.maneuverState.riskModifier}` : ""}${awarenessBoost.riskModifier > 0 ? ` + Awareness ${awarenessBoost.riskModifier}` : ""} + Zufall ${baseline.offset >= 0 ? "+" : ""}${baseline.offset}${baseline.weatherImpact > 0 ? ` + Wetter ${baseline.weatherImpact}` : ""}`,
+    formulaText: `Stress ${baseline.stressComponent.toFixed(1)} + Energy ${baseline.energyComponent.toFixed(1)} + Focus ${baseline.focusComponent.toFixed(1)} + Ablenkung ${baseline.distraction.riskModifier >= 0 ? "+" : ""}${baseline.distraction.riskModifier} + Nacht ${baseline.nightModifier >= 0 ? "+" : ""}${baseline.nightModifier} + Wetter ${baseline.weatherImpact >= 0 ? "+" : ""}${baseline.weatherImpact} + Herzfrequenz ${heartRateSensor.riskModifier >= 0 ? "+" : ""}${heartRateSensor.riskModifier}${baseline.maneuverState.riskModifier > 0 ? ` + Manoever ${baseline.maneuverState.riskModifier}` : ""}${awarenessBoost.riskModifier > 0 ? ` + Kopplung ${awarenessBoost.riskModifier}` : ""} + Zufall ${baseline.offset >= 0 ? "+" : ""}${baseline.offset}`,
   };
 }
 
@@ -1014,7 +1572,7 @@ function buildRiskExplanation(stress, energy, focus, drivingContext, isNight, we
   if (isNight) {
     contributions.push({
       label: "Nachtfahrt",
-      value: weatherLabel.includes("sturm") ? 1 : energy >= 75 && focus >= 75 ? 1 : 2,
+      value: deriveNightRiskModifier(isNight, energy, focus),
       type: "risk",
     });
   } else {
@@ -1043,16 +1601,16 @@ function buildRiskExplanation(stress, energy, focus, drivingContext, isNight, we
 
   if (weatherLabel.includes("sturm")) {
     drivers.push("Sturm");
-    contributions.push({ label: "Sturm", value: stress < 70 ? 3 : 5, type: "risk" });
+    contributions.push({ label: "Sturm", value: deriveWeatherRiskModifier(weather, stress, focus), type: "risk" });
   } else if (weatherLabel.includes("nebel")) {
     drivers.push("Nebel");
-    contributions.push({ label: "Nebel", value: focus >= 60 ? 2 : 3, type: "risk" });
+    contributions.push({ label: "Nebel", value: deriveWeatherRiskModifier(weather, stress, focus), type: "risk" });
   } else if (weatherLabel.includes("regen")) {
     drivers.push("Regen");
-    contributions.push({ label: "Regen", value: stress < 65 ? 2 : 5, type: "risk" });
+    contributions.push({ label: "Regen", value: deriveWeatherRiskModifier(weather, stress, focus), type: "risk" });
   } else if (weatherLabel.includes("wind")) {
     drivers.push("Wind");
-    contributions.push({ label: "Wind", value: focus >= 55 ? 2 : 4, type: "risk" });
+    contributions.push({ label: "Wind", value: deriveWeatherRiskModifier(weather, stress, focus), type: "risk" });
   }
 
   if (stress >= 75) {
@@ -1188,7 +1746,14 @@ function recomputeAssessmentFromContext(dataset) {
     context.weather,
     riskInputs,
   );
-  const derivedState = deriveDriverStateFromRisk(finalRisk);
+  const derivedState = deriveDriverStateFromRisk(finalRisk, {
+    stress,
+    energy,
+    focus,
+    heartRateState: riskInputs.heartRateState,
+    isNight: timeContext.isNight,
+    weather: context.weather,
+  });
   const systemMode = deriveSystemModeFromDriverState(derivedState.state);
   const assistNarrative = deriveAssistReactionFromState(derivedState.state, focus, riskInputs);
   const mode = deriveDrivingModeFromRisk(finalRisk);
@@ -1221,7 +1786,7 @@ function recomputeAssessmentFromContext(dataset) {
     ...telemetry,
     heartRate: riskInputs.heartRate,
     inputSummary: context.homeAssistantConnected
-      ? "Context-sensitive adaptation active with Home Assistant input"
+      ? "Context adaptation active / HA Sync"
       : telemetry.inputSummary || FALLBACK_DATA.telemetry.inputSummary,
   };
   nextDataset.assessment = {
@@ -1249,6 +1814,7 @@ function recomputeAssessmentFromContext(dataset) {
     awarenessBoostAnalysis: riskInputs.awarenessBoostAnalysis,
     awarenessBoostLabel: riskInputs.awarenessBoostLabel,
     riskRandomOffset: riskInputs.randomOffset,
+    nightModifier: riskInputs.nightModifier,
     weatherImpact: riskInputs.weatherImpact,
     warningLevel: derivedState.warningLevel,
     recommendation,
@@ -1292,7 +1858,7 @@ function buildSimulatedHomeAssistantContext(dataset) {
       : "Home status synced: Morgenroutine aktiv, Haus im Tagesmodus",
     weather_sensor: weather === "Regen" ? "Rain probability elevated" : "Clear visibility baseline",
     traffic: timeContext.isNight ? "Gering" : "Moderat",
-    status: "Home Assistant connected",
+    status: "HA Sync: Connected",
   };
 }
 
@@ -1319,11 +1885,11 @@ function normalizeHomeAssistantContext(payload, dataset) {
     weather,
     drivingContext: source.driving_context || source.fahrkontext || dataset?.context?.drivingContext || FALLBACK_DATA.context.drivingContext,
     criticalManeuver: source.critical_maneuver || source.criticalManeuver || dataset?.context?.criticalManeuver || FALLBACK_DATA.context.criticalManeuver,
-    homeAssistant: detailParts.join(" | ") || "Home context synced",
+    homeAssistant: detailParts.join(" | ") || "HA context synced",
     weatherSensor: source.weather_sensor || (String(weather).toLowerCase().includes("regen") ? "Rain probability elevated" : "Context weather stable"),
     traffic: source.traffic || dataset?.context?.traffic || FALLBACK_DATA.context.traffic,
-    connectionStatus: source.status || "Home Assistant connected",
-    smartContextStatus: "Smart Context: Home Assistant Connected",
+    connectionStatus: source.status || "HA Sync: Connected",
+    smartContextStatus: "Smart Context: HA Sync",
   };
 }
 
@@ -1352,7 +1918,7 @@ function applyHomeAssistantContext(dataset, homeAssistantContext) {
 
   nextDataset.system = {
     ...nextDataset.system,
-    systemLabel: homeAssistantContext.connectionStatus || "Home Assistant connected",
+    systemLabel: homeAssistantContext.connectionStatus || "HA Sync: Connected",
   };
   nextDataset.time = {
     ...nextDataset.time,
@@ -1369,7 +1935,7 @@ function applyHomeAssistantContext(dataset, homeAssistantContext) {
       : nextDataset.context?.isNight,
     timeSource: "home_assistant",
     homeAssistantConnected: true,
-    smartContextStatus: homeAssistantContext.smartContextStatus || "Smart Context: Home Assistant Connected",
+    smartContextStatus: homeAssistantContext.smartContextStatus || "Smart Context: HA Sync",
     homeAssistant: homeAssistantContext.homeAssistant || nextDataset.context?.homeAssistant,
     weatherSensor: homeAssistantContext.weatherSensor || nextDataset.context?.weatherSensor,
     traffic: homeAssistantContext.traffic || nextDataset.context?.traffic,
@@ -1389,8 +1955,8 @@ function removeHomeAssistantContext(dataset) {
     ...nextDataset.context,
     timeSource: "system_time",
     homeAssistantConnected: false,
-    smartContextStatus: "Smart Context: Local Context Only",
-    homeAssistant: "Keine Daten",
+    smartContextStatus: "Smart Context: Local Sync",
+    homeAssistant: "No HA data",
   };
 
   return recomputeAssessmentFromContext(nextDataset);
@@ -1483,7 +2049,7 @@ function simulateAssessmentUpdate(dataset) {
   telemetry.heartRate = riskInputs.heartRate;
   const riskContext = {
     baseRisk,
-    nightModifier: 0,
+    nightModifier: riskInputs.nightModifier,
     sensorModifier: riskInputs.sensorModifier,
     weatherImpact: riskInputs.weatherImpact,
     finalRisk: baseRisk,
@@ -1497,7 +2063,15 @@ function simulateAssessmentUpdate(dataset) {
     context.weather,
     riskInputs,
   );
-  const derivedState = deriveDriverStateFromRisk(riskContext.finalRisk);
+  const derivedState = deriveDriverStateFromRisk(riskContext.finalRisk, {
+    stress,
+    energy,
+    focus,
+    heartRateState: riskInputs.heartRateState,
+    isNight: timeContext.isNight,
+    weather: context.weather,
+    riskTrend: deriveRiskTrend(riskContext.finalRisk, previousRenderedRiskScore).key,
+  });
   const systemMode = deriveSystemModeFromDriverState(derivedState.state);
   const assistNarrative = deriveAssistReactionFromState(derivedState.state, focus, riskInputs);
   const mode = deriveDrivingModeFromRisk(riskContext.finalRisk);
@@ -1541,6 +2115,7 @@ function simulateAssessmentUpdate(dataset) {
     awarenessBoostAnalysis: riskInputs.awarenessBoostAnalysis,
     awarenessBoostLabel: riskInputs.awarenessBoostLabel,
     riskRandomOffset: riskInputs.randomOffset,
+    nightModifier: riskInputs.nightModifier,
     weatherImpact: riskInputs.weatherImpact,
     warningLevel: derivedState.warningLevel,
     recommendation,
@@ -1569,11 +2144,11 @@ function updateScenarioStatus(isOverrideActive) {
 
   liveChip.classList.toggle("is-live", !isOverrideActive);
   liveChip.classList.toggle("is-override", isOverrideActive);
-  liveChip.textContent = isOverrideActive ? "Simulation Mode Active" : "Live Sync";
+  liveChip.textContent = isOverrideActive ? "Simulation Override" : "Runtime Sync";
   simulationPanel?.classList.toggle("is-override", isOverrideActive);
   if (overrideBadge) {
     overrideBadge.classList.toggle("is-simulation", isOverrideActive);
-    overrideBadge.textContent = isOverrideActive ? "Simulation Override" : "Standard Mode";
+    overrideBadge.textContent = isOverrideActive ? "Simulation Override" : "Runtime Standard";
   }
 }
 
@@ -1775,7 +2350,7 @@ function setupHomeAssistantIntegration() {
     const sourceDataset = structuredClone(currentDataset || baseSystemDataset || FALLBACK_DATA);
 
     connectButton.disabled = true;
-    connectButton.textContent = "Connecting...";
+    connectButton.textContent = "Connecting HA Sync...";
 
     try {
       const homeAssistantContext = await loadHomeAssistantContext(sourceDataset);
@@ -1789,7 +2364,7 @@ function setupHomeAssistantIntegration() {
       renderDashboard(nextDataset);
       syncScenarioInputs(nextDataset);
     } finally {
-      connectButton.textContent = "Connect Home Assistant";
+      connectButton.textContent = "Connect HA Sync";
       renderHomeAssistantControls();
     }
   });
@@ -2301,6 +2876,8 @@ function normalizeDashboardPayload(data) {
     heartRateAnalysis: assessment.heartRateAnalysis ?? assessment.heart_rate_analysis ?? derivedHeartRate.analysisLabel,
     heartRateImpactLabel: assessment.heartRateImpactLabel ?? assessment.heart_rate_impact_label ?? derivedHeartRate.impactLabel,
     sensorModifier: assessment.sensorModifier ?? assessment.sensor_modifier ?? derivedHeartRate.riskModifier,
+    nightModifier: assessment.nightModifier ?? assessment.night_modifier ?? 0,
+    weatherImpact: assessment.weatherImpact ?? assessment.weather_impact ?? 0,
     criticalManeuverState: assessment.criticalManeuverState ?? assessment.critical_maneuver_state ?? dataset.context.criticalManeuver,
     criticalManeuverLabel: assessment.criticalManeuverLabel ?? assessment.critical_maneuver_label ?? deriveCriticalManeuverState(dataset.context.criticalManeuver).label,
     criticalManeuverImpact: assessment.criticalManeuverImpact ?? assessment.critical_maneuver_impact ?? deriveCriticalManeuverState(dataset.context.criticalManeuver).riskModifier,
@@ -2371,13 +2948,24 @@ function applyHeartRateSensorDisplay(dataset) {
 
 function renderDashboard(data) {
   const dataset = normalizeDashboardPayload(data || FALLBACK_DATA);
+  const previousDriverState = document.body.dataset.driverState || "";
   const timeContext = resolveTimeContext(dataset);
   const sourceLabel = getTimeSourceLabel(dataset.context?.timeSource);
   const riskContext = calculateNightAdjustedRisk(dataset.assessment?.riskScore, false);
   const riskTrend = deriveRiskTrend(riskContext.finalRisk, previousRenderedRiskScore);
+  riskContext.nightModifier = Number(dataset.assessment?.nightModifier || 0);
   riskContext.sensorModifier = Number(dataset.assessment?.sensorModifier || 0);
   riskContext.weatherImpact = Number(dataset.assessment?.weatherImpact || 0);
-  const derivedState = deriveDriverStateFromRisk(riskContext.finalRisk);
+  const derivedState = deriveDriverStateFromRisk(riskContext.finalRisk, {
+    stress: dataset.telemetry?.stress,
+    energy: dataset.telemetry?.energy,
+    focus: dataset.telemetry?.focus,
+    heartRateState: dataset.assessment?.heartRateState,
+    isNight: timeContext.isNight,
+    weather: dataset.context?.weather,
+    previousState: previousDriverState,
+    riskTrend: riskTrend.key,
+  });
   const systemMode = deriveSystemModeFromDriverState(derivedState.state);
   const systemDecision = deriveSystemDecisionFromDriverState(derivedState.state);
   const derivedDrivingMode = deriveDrivingModePresentation(riskContext.finalRisk);
@@ -2394,20 +2982,26 @@ function renderDashboard(data) {
       warningLevel: derivedState.warningLevel,
     },
   };
-  const viewDataset = normalizedDataset;
+  let viewDataset = normalizedDataset;
+  const coupling = deriveSystemCoupling(viewDataset, derivedState, riskContext, riskTrend);
+  viewDataset = applySystemCouplingToDataset(viewDataset, coupling);
   currentDataset = structuredClone(viewDataset);
   const narrative = deriveNightAwareNarrative(viewDataset, timeContext);
   const systemDecisionReason = deriveSystemDecisionReason(viewDataset, derivedState, riskContext);
-  document.body.dataset.driverState = String(derivedState.state || "").trim().toLowerCase();
+  const nextDriverState = String(derivedState.state || "").trim().toLowerCase();
+  const isSystemReaction = Boolean(previousDriverState)
+    && (previousDriverState !== nextDriverState || riskTrend.key !== "stable");
+  document.body.dataset.driverState = nextDriverState;
 
   setText("system-status-label", viewDataset.system?.systemLabel || "System Online");
-  setText("override-badge", viewDataset.system?.overrideMode ? "Override Active" : "Standard Mode");
+  setText("override-badge", viewDataset.system?.overrideMode ? "Simulation Override" : "Runtime Standard");
   const externalSourceConnected = Boolean(viewDataset.context?.homeAssistantConnected)
     || viewDataset.context?.timeSource === "home_assistant";
-  setText("external-source-status", externalSourceConnected ? "Connected" : "Disconnected");
+  setText("external-source-status", externalSourceConnected ? coupling.homeAssistantStatus : "HA Offline");
   const externalSourceChip = document.getElementById("external-source-chip");
   if (externalSourceChip) {
     externalSourceChip.dataset.sourceState = externalSourceConnected ? "connected" : "disconnected";
+    externalSourceChip.dataset.supportLevel = coupling.supportLevel.toLowerCase();
   }
   setText("mental-state", derivedState.state);
   animateStateTransition("mental-state", derivedState.state);
@@ -2454,13 +3048,10 @@ function renderDashboard(data) {
       riskFormulaText,
     ].filter(Boolean).join(" / "),
   );
-  setText(
-    "reason-decision",
-    `${viewDataset.assessment?.mode || "Adaptiv"} / ${narrative.assistReaction}`,
-  );
-  setText("driving-mode", viewDataset.assessment?.mode || "Adaptiv");
-  setText("driving-mode-derivation", `Derived from Risk Index ${riskContext.finalRisk}`);
-  setText("recommendation", narrative.recommendation);
+  setText("reason-decision", `${coupling.drivingMode} / ${coupling.strategy}`);
+  setText("driving-mode", coupling.drivingMode);
+  setText("driving-mode-derivation", coupling.linkedSummary);
+  setText("recommendation", `${viewDataset.assessment?.recommendation || narrative.recommendation} Strategy: ${coupling.strategy}.`);
   setText(
     "decision-input",
     `${viewDataset.context?.drivingContext || "Kontext"} / ${viewDataset.context?.weather || "Wetter"} / Manoever ${viewDataset.assessment?.criticalManeuverLabel || "Kein kritisches Manoever"} / Stress ${viewDataset.telemetry?.stress ?? "-"} / Energy ${viewDataset.telemetry?.energy ?? "-"} / Focus ${viewDataset.telemetry?.focus ?? "-"} / HR ${viewDataset.telemetry?.heartRate ?? "-"} bpm`,
@@ -2471,44 +3062,87 @@ function renderDashboard(data) {
       `Risk ${riskContext.finalRisk}`,
       riskTrend.label,
       derivedState.state,
+      coupling.supportLevel,
+      coupling.syncMode,
       viewDataset.assessment?.criticalManeuverAnalysis || "",
-      viewDataset.assessment?.heartRateAnalysis || "Heart Rate: N/A",
+      viewDataset.assessment?.heartRateAnalysis || "Heart Rate: No data",
       viewDataset.assessment?.awarenessBoostAnalysis || "",
     ].filter(Boolean).join(" / "),
   );
   setText(
     "decision-decision",
-    `${viewDataset.assessment?.mode || "Adaptiv"} / ${viewDataset.assessment?.systemMode || systemMode.label}`,
+    `${coupling.drivingMode} / ${viewDataset.assessment?.systemMode || systemMode.label} / ${coupling.strategy}`,
   );
   setText(
     "decision-action",
-    narrative.recommendation,
+    `${viewDataset.assessment?.recommendation || narrative.recommendation} Strategy: ${coupling.strategy}.`,
   );
-  triggerHomeAssistantAction(viewDataset.assessment?.mode || "Adaptiv", derivedState.state);
+  renderMqttEventBus(derivedState.state, coupling.drivingMode, riskContext.finalRisk, {
+    topic: coupling.mqttTopic,
+    status: coupling.mqttStatus,
+    payload: {
+      driverState: derivedState.state,
+      drivingMode: coupling.drivingMode,
+      riskIndex: riskContext.finalRisk,
+      supportStrategy: coupling.strategy,
+      triggerReason: coupling.triggerReason,
+      supportLevel: coupling.supportLevel,
+      homeAssistantStatus: coupling.homeAssistantStatus,
+      eventPriority: coupling.eventPriority,
+      syncMode: coupling.syncMode,
+      riskTrend: riskTrend.key,
+      timestamp: new Date().toISOString(),
+    },
+  });
+  triggerHomeAssistantAction(coupling.drivingMode, derivedState.state, riskContext.finalRisk, coupling);
+  renderRuntimeStatus(viewDataset, derivedState, coupling);
+  updateDebugOverlay({
+    driverState: derivedState.state,
+    riskIndex: riskContext.finalRisk,
+    drivingMode: coupling.drivingMode,
+    homeAssistantConnected: externalSourceConnected,
+    mqttTopic: coupling.mqttTopic,
+    lastEventTime: lastDebugEventTime,
+  });
   setText("context-label", `${viewDataset.context?.drivingContext || "Kontext"} / ${viewDataset.context?.weather || "Wetter"}`);
   setText("route-value", viewDataset.context?.route || "Unbekannt");
   setText("weather-value", viewDataset.context?.weather || "Unbekannt");
   setText("traffic-value", viewDataset.context?.traffic || "Unbekannt");
-  setText("home-assistant-value", viewDataset.context?.homeAssistant || "Keine Daten");
+  setText(
+    "home-assistant-value",
+    externalSourceConnected
+      ? `${viewDataset.context?.homeAssistant || "HA Connected"} / ${coupling.homeAssistantStatus}`
+      : `${viewDataset.context?.homeAssistant || "No HA data"} / ${coupling.syncMode}`,
+  );
   setText("clock-time", viewDataset.time?.clock || "--:--");
   setText("clock-date", viewDataset.time?.date || "Keine Datumsdaten");
   setText("phase-label", `${viewDataset.time?.phase || "Operation Phase"} / ${timeContext.timeOfDay} mode`);
-  setText("light-mode", viewDataset.assessment?.lightMode || "Adaptivlicht");
-  setText("camera-status", viewDataset.telemetry?.cameraStatus || "N/A");
-  setText("wheel-contact", viewDataset.telemetry?.wheelContact || "N/A");
-  setText("cabin-state", viewDataset.telemetry?.cabinState || "N/A");
-  setText("weather-sensor", viewDataset.context?.weatherSensor || "N/A");
-  setText("input-summary", viewDataset.telemetry?.inputSummary || "N/A");
+  setText("light-mode", coupling.lightMode || viewDataset.assessment?.lightMode || "Adaptivlicht");
+  setText("camera-status", viewDataset.telemetry?.cameraStatus || "No data");
+  setText("wheel-contact", viewDataset.telemetry?.wheelContact || "No data");
+  setText("cabin-state", viewDataset.telemetry?.cabinState || "No data");
+  setText("weather-sensor", viewDataset.context?.weatherSensor || "No data");
+  setText("input-summary", viewDataset.telemetry?.inputSummary || "No input data");
   setText("ai-title", viewDataset.assessment?.aiTitle || "Adaptive Support Strategy");
-  setText("ai-summary", narrative.aiSummary);
-  setText("coffee-tag", `Coffee: ${viewDataset.assessment?.coffeeRecommendation || "N/A"}`);
-  setText("lighting-tag", `Lighting: ${viewDataset.assessment?.lightMode || "N/A"}`);
-  setText("context-tag", `Mode: ${viewDataset.assessment?.mode || "N/A"}`);
+  setText("ai-summary", `${viewDataset.assessment?.aiSummary || narrative.aiSummary} ${coupling.linkedSummary}.`);
+  setText("coffee-tag", `Break Support: ${coupling.coffeeRecommendation || viewDataset.assessment?.coffeeRecommendation || "No action"}`);
+  setText("lighting-tag", `Lighting: ${coupling.lightMode || viewDataset.assessment?.lightMode || "No change"}`);
+  setText("context-tag", `Mode ${coupling.drivingMode} / Driver ${derivedState.state} / Priority ${coupling.eventPriority}`);
   setText("warning-title", viewDataset.assessment?.warningTitle || "Warning State");
-  setText("warning-priority", viewDataset.assessment?.warningPriority || "Unknown");
-  setText("warning-trigger", viewDataset.assessment?.warningTrigger || "Unknown");
-  setText("warning-action", narrative.warningAction);
-  setText("smart-context-status", viewDataset.context?.smartContextStatus || "Smart Context: Local Context Only");
+  setText("warning-priority", viewDataset.assessment?.warningPriority || "No priority");
+  setText("warning-trigger", coupling.warningTrigger || viewDataset.assessment?.warningTrigger || "No trigger");
+  setText("warning-action", `${viewDataset.assessment?.warningAction || narrative.warningAction} / ${coupling.strategy}`);
+  setText("smart-context-status", viewDataset.context?.smartContextStatus || "Smart Context: Local Sync");
+  if (isSystemReaction) {
+    if (previousDriverState !== nextDriverState) {
+      pushRuntimeEvent("state", "Driver State", `${previousDriverState || "init"} -> ${derivedState.state}`);
+    }
+    if (riskTrend.key === "rising" || derivedState.warningLevel === "ROT") {
+      pushRuntimeEvent("risk", "Risk Alert", `Risk ${riskContext.finalRisk} / ${riskTrend.label} / ${coupling.supportLevel}`);
+    }
+    animateDashboardStateTransition(derivedState.state, riskTrend.key);
+    triggerSystemReactionActivity(derivedState.state, riskTrend.key);
+  }
   previousRenderedRiskScore = riskContext.finalRisk;
 
   setMetric("stress-value", "stress-bar", viewDataset.telemetry?.stress);
@@ -2548,6 +3182,7 @@ function renderDashboard(data) {
 
 async function loadDashboardData() {
   if (window.__PORSCHE_ASSIST_DATA__) {
+    backendRuntimeState = "online";
     baseSystemDataset = structuredClone(window.__PORSCHE_ASSIST_DATA__);
     renderDashboard(window.__PORSCHE_ASSIST_DATA__);
     syncScenarioInputs(baseSystemDataset);
@@ -2566,11 +3201,13 @@ async function loadDashboardData() {
     }
 
     const payload = await response.json();
+    backendRuntimeState = "online";
     baseSystemDataset = structuredClone(payload);
     renderDashboard(payload);
     syncScenarioInputs(baseSystemDataset);
   } catch (error) {
     console.info("Fallback auf Dummy-Daten:", error.message);
+    backendRuntimeState = "offline";
     baseSystemDataset = structuredClone(FALLBACK_DATA);
     renderDashboard(FALLBACK_DATA);
     syncScenarioInputs(baseSystemDataset);
@@ -2599,12 +3236,40 @@ function startClockTick() {
   }, 1000);
 }
 
+function setupDebugOverlay() {
+  const toggle = document.getElementById("debug-overlay-toggle");
+  const overlay = document.getElementById("debug-overlay");
+  if (!toggle || !overlay) return;
+
+  toggle.addEventListener("click", () => {
+    const isOpen = overlay.hidden;
+    overlay.hidden = !isOpen;
+    toggle.classList.toggle("is-active", isOpen);
+    toggle.setAttribute("aria-expanded", String(isOpen));
+    document.body.classList.toggle("is-debug-overlay-open", isOpen);
+
+    if (isOpen && currentDataset) {
+      updateDebugOverlay({
+        driverState: currentDataset.assessment?.driverState,
+        riskIndex: document.getElementById("risk-score")?.textContent || currentDataset.assessment?.riskScore,
+        drivingMode: currentDataset.assessment?.mode,
+        homeAssistantConnected: Boolean(currentDataset.context?.homeAssistantConnected)
+          || currentDataset.context?.timeSource === "home_assistant",
+        mqttTopic: document.getElementById("mqtt-topic")?.textContent,
+        lastEventTime: lastDebugEventTime,
+      });
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  pushRuntimeEvent("system", "System", "Timeline ready");
   loadDashboardData();
   startClockTick();
   setupScenarioInteraction();
   setupHomeAssistantIntegration();
   setupStateScan();
+  setupDebugOverlay();
 });
 
 /*
